@@ -1,0 +1,23 @@
+# Build artifacts
+node_modules/
+.netlify/
+.cache/
+dist/
+
+# Local environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cookies (NEVER commit)
+cookies.txt
+netlify-cookies.txt
+*.har

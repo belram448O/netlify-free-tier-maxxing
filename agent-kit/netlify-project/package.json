@@ -1,0 +1,19 @@
+{
+  "name": "netlify-free-tier-scraper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Netlify Free Tier scraper toolkit",
+  "type": "module",
+  "scripts": {
+    "deploy:preview": "netlify deploy --message \"scraper deploy\"",
+    "deploy:prod": "echo 'WARNING: prod deploys cost 15 credits each' && netlify deploy --prod",
+    "logs": "netlify logs --json --since 1h",
+    "logs:follow": "netlify logs --follow",
+    "read-blobs": "node scripts/read-blobs.js",
+    "list-blobs": "node scripts/list-blobs.js"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^8.0.0",
+    "tls-impersonate": "^0.1.0"
+  }
+}

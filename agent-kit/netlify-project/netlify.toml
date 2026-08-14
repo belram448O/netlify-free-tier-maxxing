@@ -1,0 +1,28 @@
+[build]
+  command = "npm install"
+  publish = "src"
+  functions = "functions"
+
+[functions]
+  # zisi = zip-it-and-ship-it — preserves native binaries and node_modules
+  # esbuild would strip native binaries and external modules
+  node_bundler = "zisi"
+
+  # External modules — keep these as separate node_modules in the Lambda bundle
+  # (required for ESM-only packages like tls-impersonate)
+  external_node_modules = ["tls-impersonate"]
+
+  # Include the functions/node_modules directory in the Lambda bundle
+  # (zisi doesn't auto-include node_modules from the functions dir by default)
+  included_files = ["functions/node_modules/**"]
+
+# NOTE: This config does NOT define a scheduled function.
+# The function is invoked on-demand via HTTP — perfect for request-proxy / scraper patterns.
+# To add a scheduled function, create a separate file like functions/cron-scraper.mjs
+# and add:
+#   [functions."cron-scraper"]
+#     schedule = "0 * * * *"   # hourly
+
+# Build plugin for batch scraping via build process (15 min compute, 0 credits)
+[[plugins]]
+  package = "./plugins/store-data"
