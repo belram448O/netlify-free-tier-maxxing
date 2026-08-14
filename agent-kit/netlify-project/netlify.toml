@@ -17,12 +17,15 @@
   included_files = ["functions/node_modules/**"]
 
 # NOTE: This config does NOT define a scheduled function.
-# The function is invoked on-demand via HTTP — perfect for request-proxy / scraper patterns.
-# To add a scheduled function, create a separate file like functions/cron-scraper.mjs
-# and add:
-#   [functions."cron-scraper"]
-#     schedule = "0 * * * *"   # hourly
+# The functions are invoked on-demand via HTTP — perfect for request-proxy / scraper patterns.
 
-# Build plugin for batch scraping via build process (15 min compute, 0 credits)
+# Build plugin 1: stores /tmp scrape output (from build-scraper.js) to Netlify Blobs
 [[plugins]]
   package = "./plugins/store-data"
+
+# Build plugin 2: processes the download job queue (for async downloads)
+# Runs in onPostBuild, has NETLIFY_BLOBS_CONTEXT, can run up to 15 min
+# Triggered on every deploy (including preview deploys triggered by GitHub Actions cron)
+[[plugins]]
+  package = "./plugins/process-queue"
+# trigger 1786748976

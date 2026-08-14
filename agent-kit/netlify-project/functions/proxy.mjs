@@ -1,16 +1,21 @@
-// Demo 2: API/Request Proxy
+// API/Request Proxy — proper implementation
 //
 // A configurable HTTP proxy that fetches a target URL and returns the response.
-// Useful for: scraping, CORS bypass, TLS impersonation, request inspection.
+// Supports all HTTP methods, custom headers, timeout, TLS impersonation.
 //
 // Endpoints:
-//   GET  /api/proxy?url=<url>[&mode=direct|blob][&method=fetch|chrome_impersonate]
-//                  [&ua=...][&headers_only=1][&timeout=N]
-//   POST /api/proxy?url=<url>  (forwards POST body to target)
+//   ANY /api/proxy?url=<url>[&mode=direct|blob|metadata][&method=fetch|chrome_impersonate]
+//                [&ua=...][&timeout=N][&follow_redirects=0]
+//
+//   GET /api/proxy?blob_key=<key>
+//     → Retrieves a previously stored blob (from a mode=blob request)
+//
+//   GET /api/proxy?list=1[&limit=N]
+//     → Lists recent proxy results (from blob mode)
 //
 // Modes:
 //   mode=direct (default)
-//     → Fetches URL, returns response inline (passthrough of body + content-type)
+//     → Fetches URL, returns response inline (passthrough of body + content-type + headers)
 //     → Best for: small responses, low-latency use, browser-side requests
 //     → Cost: bandwidth = 20 credits/GB egress
 //
@@ -22,7 +27,7 @@
 //
 //   mode=metadata
 //     → Fetches URL, returns ONLY metadata (status, headers, size, tls fingerprint)
-//     → Best for: HEAD-like inspection, link checking
+//     → Best for: HEAD-like inspection, link checking, JA3 verification
 //     → Body is discarded; useful when you don't need the content
 //
 // Methods (TLS impersonation):
@@ -31,23 +36,32 @@
 //   method=chrome_impersonate
 //     → Uses tls-impersonate with Chrome 120 ClientHello. JA3 = 947eccbc4e2adea862cd37bf77342106 (Chrome-like)
 //     → Best for: scraping bot-protected sites that check JA3
+//     → Note: For methods other than GET/HEAD, falls back to fetch() (TLS socket impl only supports GET)
 //
-// Blob retrieval:
-//   GET /api/proxy?blob_key=<key>
-//     → Returns the stored blob content (passthrough)
-//     → Use this to fetch the result when mode=blob was used
+// Custom request headers:
+//   Pass as query params prefixed with "h_". Examples:
+//     &h_authorization=Bearer+xxx     →  sets Authorization: Bearer xxx
+//     &h_x_api_key=abc123             →  sets X-Api-Key: abc123
+//     &h_accept=application/json      →  sets Accept: application/json
+//   User-Agent can be set via &ua=... (shortcut for &h_user_agent=...)
 //
 // Examples:
+//   # Simple direct proxy (returns upstream body inline)
 //   curl '/api/proxy?url=https://example.com'
-//     → Returns example.com HTML directly
 //
-//   curl '/api/proxy?url=https://example.com&mode=blob'
-//     → Returns { blob_key: "proxy-...", size: 1234, content_type: "text/html" }
+//   # Proxy a POST request with body (forwards body to upstream)
+//   curl -X POST '/api/proxy?url=https://httpbin.org/post' -d '{"hello":"world"}'
+//
+//   # Use blob mode for large responses (returns metadata, not body)
+//   curl '/api/proxy?url=https://example.com/large-file&mode=blob'
+//   # Then retrieve:
 //   curl '/api/proxy?blob_key=proxy-...'
-//     → Returns the stored HTML
 //
+//   # Inspect TLS fingerprint without downloading body
 //   curl '/api/proxy?url=https://tls.peet.ws/api/all&method=chrome_impersonate&mode=metadata'
-//     → Returns { status: 200, tls: { ja3_hash: "947eccbc...", ... }, headers: {...}, size: 7554 }
+//
+//   # Custom headers (e.g., auth)
+//   curl '/api/proxy?url=https://api.github.com/user&h_authorization=token+ghp_xxx'
 
 import tls from 'node:tls';
 import { impersonate, isSupported } from 'tls-impersonate';
@@ -69,33 +83,113 @@ const CHROME_120_SPEC = {
 };
 
 const DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const DEFAULT_TIMEOUT_MS = 30_000;
 
-// Fetch with method selection
-async function fetchTarget(targetUrl, method, userAgent, reqMethod = 'GET', reqBody = null) {
-  if (method === 'chrome_impersonate') {
-    return fetchWithTlsImpersonate(targetUrl, userAgent, reqMethod, reqBody);
-  }
-  // Default: undici fetch
-  const fetchOpts = {
-    method: reqMethod,
-    headers: { 'User-Agent': userAgent, 'Accept': '*/*' },
-    redirect: 'follow',
-  };
-  if (reqMethod !== 'GET' && reqMethod !== 'HEAD' && reqBody) {
-    fetchOpts.body = reqBody;
-  }
-  const r = await fetch(targetUrl, fetchOpts);
-  const buf = Buffer.from(await r.arrayBuffer());
-  return {
-    status: r.status,
-    body: buf,
-    content_type: r.headers.get('content-type') || 'application/octet-stream',
-    headers: Object.fromEntries(r.headers.entries()),
-    tls: null,
-  };
+// === Blob helpers ===
+
+async function getStore() {
+  const { getStore: getStoreFn } = await import('@netlify/blobs');
+  return getStoreFn(STORE_NAME);
 }
 
-async function fetchWithTlsImpersonate(targetUrl, userAgent, reqMethod, reqBody) {
+async function storeResult(body, contentType, targetUrl, method, status, requestMethod) {
+  const store = await getStore();
+  const blobKey = `proxy-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+  await store.set(blobKey, body, {
+    metadata: {
+      content_type: contentType,
+      size: String(body.length),
+      target_url: targetUrl,
+      method,
+      request_method: requestMethod,
+      upstream_status: String(status),
+      stored_at: new Date().toISOString(),
+    },
+  });
+  await store.setJSON('latest', {
+    blob_key: blobKey,
+    target_url: targetUrl,
+    method,
+    request_method: requestMethod,
+    upstream_status: status,
+    size: body.length,
+    stored_at: new Date().toISOString(),
+  });
+  return blobKey;
+}
+
+async function retrieveResult(blobKey) {
+  const store = await getStore();
+  const blob = await store.get(blobKey, { type: 'arrayBuffer' });
+  const metadata = await store.getMetadata(blobKey);
+  return { blob, metadata };
+}
+
+async function listResults(limit = 50) {
+  const store = await getStore();
+  const list = await store.list();
+  const keys = (list.blobs || []).filter(b => b.key.startsWith('proxy-'));
+  return keys.slice(0, limit).map(k => ({ key: k.key, size: k.size, last_modified: k.last_modified }));
+}
+
+// === Header parsing ===
+
+function parseCustomHeaders(params) {
+  const headers = {};
+  for (const [key, value] of params.entries()) {
+    if (key.startsWith('h_')) {
+      const headerName = key.substring(2).replace(/_/g, '-');
+      headers[headerName] = value;
+    }
+  }
+  return headers;
+}
+
+// === Fetch implementations ===
+
+async function fetchTarget(targetUrl, method, userAgent, reqMethod, reqBody, customHeaders, followRedirects, timeoutMs) {
+  // For non-GET/HEAD methods, always use undici fetch (TLS socket impl only supports GET)
+  if (method === 'chrome_impersonate' && (reqMethod === 'GET' || reqMethod === 'HEAD')) {
+    return fetchWithTlsImpersonate(targetUrl, userAgent, timeoutMs);
+  }
+  return fetchWithUndici(targetUrl, userAgent, reqMethod, reqBody, customHeaders, followRedirects, timeoutMs);
+}
+
+async function fetchWithUndici(targetUrl, userAgent, reqMethod, reqBody, customHeaders, followRedirects, timeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(new Error('Request timeout')), timeoutMs);
+  try {
+    const headers = {
+      'User-Agent': userAgent,
+      'Accept': '*/*',
+      ...customHeaders,
+    };
+    const fetchOpts = {
+      method: reqMethod,
+      headers,
+      redirect: followRedirects ? 'follow' : 'manual',
+      signal: controller.signal,
+    };
+    if (reqMethod !== 'GET' && reqMethod !== 'HEAD' && reqBody) {
+      fetchOpts.body = reqBody;
+    }
+    const r = await fetch(targetUrl, fetchOpts);
+    const buf = Buffer.from(await r.arrayBuffer());
+    return {
+      status: r.status,
+      body: buf,
+      content_type: r.headers.get('content-type') || 'application/octet-stream',
+      headers: Object.fromEntries(r.headers.entries()),
+      tls: null,
+      redirected: r.redirected,
+      final_url: r.url,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchWithTlsImpersonate(targetUrl, userAgent, timeoutMs) {
   if (!isSupported()) throw new Error('tls-impersonate not supported on this runtime');
   const { tlsOptions, unsupported } = impersonate(CHROME_120_SPEC);
 
@@ -107,106 +201,89 @@ async function fetchWithTlsImpersonate(targetUrl, userAgent, reqMethod, reqBody)
     ...tlsOptions,
   });
 
-  await new Promise((resolve, reject) => {
-    tlsSocket.once('secureConnect', resolve);
-    tlsSocket.once('error', reject);
-    setTimeout(() => reject(new Error('TLS timeout')), 10000);
-  });
+  const timeout = setTimeout(() => tlsSocket.destroy(new Error('TLS timeout')), timeoutMs);
+  try {
+    await new Promise((resolve, reject) => {
+      tlsSocket.once('secureConnect', resolve);
+      tlsSocket.once('error', reject);
+    });
 
-  const path = (url.pathname || '/') + (url.search || '');
-  const reqLine = `${reqMethod} ${path} HTTP/1.1`;
-  const headers = [
-    reqLine,
-    `Host: ${url.hostname}`,
-    `User-Agent: ${userAgent}`,
-    `Accept: */*`,
-    `Connection: close`,
-  ];
-  if (reqBody && reqMethod !== 'GET' && reqMethod !== 'HEAD') {
-    headers.push(`Content-Length: ${Buffer.byteLength(reqBody)}`);
-  }
-  tlsSocket.write(headers.join('\r\n') + '\r\n\r\n');
-  if (reqBody && reqMethod !== 'GET' && reqMethod !== 'HEAD') {
-    tlsSocket.write(reqBody);
-  }
+    const path = (url.pathname || '/') + (url.search || '');
+    tlsSocket.write(
+      `GET ${path} HTTP/1.1\r\n` +
+      `Host: ${url.hostname}\r\n` +
+      `User-Agent: ${userAgent}\r\n` +
+      `Accept: */*\r\n` +
+      `Connection: close\r\n\r\n`
+    );
 
-  const chunks = [];
-  await new Promise((resolve) => {
-    tlsSocket.on('data', (c) => chunks.push(c));
-    tlsSocket.on('end', resolve);
-    tlsSocket.on('close', resolve);
-    setTimeout(resolve, 8000);
-  });
-  tlsSocket.destroy();
+    const chunks = [];
+    await new Promise((resolve) => {
+      tlsSocket.on('data', (c) => chunks.push(c));
+      tlsSocket.on('end', resolve);
+      tlsSocket.on('close', resolve);
+      tlsSocket.on('error', resolve);
+    });
 
-  const raw = Buffer.concat(chunks).toString('utf8');
-  const headerEnd = raw.indexOf('\r\n\r\n');
-  const rawHeaders = headerEnd >= 0 ? raw.substring(0, headerEnd) : '';
-  const body = headerEnd >= 0 ? raw.substring(headerEnd + 4) : raw;
-  const status = parseInt(rawHeaders.match(/^HTTP\/[\d.]+ (\d+)/)?.[1] || '0');
+    const raw = Buffer.concat(chunks).toString('utf8');
+    const headerEnd = raw.indexOf('\r\n\r\n');
+    const rawHeaders = headerEnd >= 0 ? raw.substring(0, headerEnd) : '';
+    const body = headerEnd >= 0 ? raw.substring(headerEnd + 4) : raw;
+    const status = parseInt(rawHeaders.match(/^HTTP\/[\d.]+ (\d+)/)?.[1] || '0');
 
-  // Parse headers
-  const headerLines = rawHeaders.split('\r\n').slice(1).filter(Boolean);
-  const headerObj = {};
-  for (const line of headerLines) {
-    const idx = line.indexOf(':');
-    if (idx > 0) {
-      const key = line.substring(0, idx).trim().toLowerCase();
-      const val = line.substring(idx + 1).trim();
-      headerObj[key] = val;
+    const headerLines = rawHeaders.split('\r\n').slice(1).filter(Boolean);
+    const headerObj = {};
+    for (const line of headerLines) {
+      const idx = line.indexOf(':');
+      if (idx > 0) {
+        const key = line.substring(0, idx).trim().toLowerCase();
+        const val = line.substring(idx + 1).trim();
+        headerObj[key] = val;
+      }
     }
-  }
 
-  return {
-    status,
-    body: Buffer.from(body, 'utf8'),
-    content_type: headerObj['content-type'] || 'application/octet-stream',
-    headers: headerObj,
-    tls: {
-      negotiated: {
-        protocol: tlsSocket.getProtocol(),
-        cipher: tlsSocket.getCipher()?.name,
-        alpn: tlsSocket.alpnProtocol,
+    return {
+      status,
+      body: Buffer.from(body, 'utf8'),
+      content_type: headerObj['content-type'] || 'application/octet-stream',
+      headers: headerObj,
+      tls: {
+        negotiated: {
+          protocol: tlsSocket.getProtocol(),
+          cipher: tlsSocket.getCipher()?.name,
+          alpn: tlsSocket.alpnProtocol,
+        },
+        unsupported_features: unsupported,
       },
-      unsupported_features: unsupported,
-    },
-  };
+    };
+  } finally {
+    clearTimeout(timeout);
+    tlsSocket.destroy();
+  }
 }
 
-// Store result in blob
-async function storeResult(body, contentType, targetUrl, method, status) {
-  const { getStore } = await import('@netlify/blobs');
-  const store = getStore(STORE_NAME);
-  const blobKey = `proxy-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-  await store.set(blobKey, body, {
-    metadata: {
-      content_type: contentType,
-      size: String(body.length),
-      target_url: targetUrl,
-      method,
-      upstream_status: String(status),
-      stored_at: new Date().toISOString(),
-    },
-  });
-  // Update latest pointer
-  await store.setJSON('latest', {
-    blob_key: blobKey,
-    target_url: targetUrl,
-    method,
-    upstream_status: status,
-    size: body.length,
-    stored_at: new Date().toISOString(),
-  });
-  return blobKey;
+// === Extract TLS fingerprint from response body (if it's a TLS echo service) ===
+
+function extractTlsFingerprint(body) {
+  try {
+    const text = body.toString('utf8');
+    if (!text.includes('ja3')) return null;
+    const j = JSON.parse(text);
+    if (j.tls?.ja3_hash) {
+      return {
+        ja3_hash: j.tls.ja3_hash,
+        ja4: j.tls.ja4,
+        http_version: j.http_version,
+        ip: j.ip,
+        ciphers_count: j.tls?.ciphers?.length,
+        extensions_count: j.tls?.extensions?.length,
+      };
+    }
+  } catch {}
+  return null;
 }
 
-async function retrieveResult(blobKey) {
-  const { getStore } = await import('@netlify/blobs');
-  const store = getStore(STORE_NAME);
-  const blob = await store.get(blobKey, { type: 'arrayBuffer' });
-  const metadata = await store.getMetadata(blobKey);
-  return { blob, metadata };
-}
+// === Main handler ===
 
 export default async function handler(req, context) {
   const url = new URL(req.url);
@@ -226,11 +303,19 @@ export default async function handler(req, context) {
           'x-blob-key': blobKey,
           'x-stored-at': metadata?.stored_at || '',
           'x-target-url': metadata?.target_url || '',
+          'x-upstream-status': metadata?.upstream_status || '',
         },
       });
     } catch (e) {
       return Response.json({ error: e.message, blob_key: blobKey }, { status: 500 });
     }
+  }
+
+  // === List mode ===
+  if (params.get('list') === '1') {
+    const limit = parseInt(params.get('limit') || '50');
+    const results = await listResults(limit);
+    return Response.json({ count: results.length, results });
   }
 
   // === Proxy mode ===
@@ -239,8 +324,9 @@ export default async function handler(req, context) {
     return Response.json({
       error: 'missing url parameter',
       usage: {
-        proxy: '?url=<target>[&mode=direct|blob|metadata][&method=fetch|chrome_impersonate][&ua=...]',
-        retrieve_blob: '?blob_key=<key>',
+        proxy: 'ANY ?url=<target>[&mode=direct|blob|metadata][&method=fetch|chrome_impersonate][&ua=...][&timeout=N][&follow_redirects=0][&h_<header>=<value>]',
+        retrieve_blob: 'GET ?blob_key=<key>',
+        list: 'GET ?list=1[&limit=N]',
       },
       modes: {
         direct: 'Returns response body inline (default). Cost: 20 cr/GB egress.',
@@ -249,8 +335,9 @@ export default async function handler(req, context) {
       },
       methods: {
         fetch: 'Default Node undici fetch (fast, JA3 = 1808993...)',
-        chrome_impersonate: 'tls-impersonate with Chrome 120 spec (JA3 = 947eccc...)',
+        chrome_impersonate: 'tls-impersonate with Chrome 120 spec (JA3 = 947eccc...). Only for GET/HEAD.',
       },
+      headers: 'Pass custom headers as &h_<header_name>=<value>. Example: &h_authorization=Bearer+xxx',
     }, { status: 400 });
   }
 
@@ -258,38 +345,28 @@ export default async function handler(req, context) {
   const method = params.get('method') || 'fetch';
   const userAgent = params.get('ua') || DEFAULT_UA;
   const headersOnly = params.get('headers_only') === '1' || mode === 'metadata';
+  const followRedirects = params.get('follow_redirects') !== '0';
+  const timeoutMs = Math.min(parseInt(params.get('timeout') || String(DEFAULT_TIMEOUT_MS)), DEFAULT_TIMEOUT_MS);
   const reqMethod = req.method;
+  const customHeaders = parseCustomHeaders(params);
   const reqBody = reqMethod !== 'GET' && reqMethod !== 'HEAD' ? await req.text() : null;
 
   if (!['direct', 'blob', 'metadata'].includes(mode)) {
     return Response.json({ error: `invalid mode: ${mode}`, valid_modes: ['direct', 'blob', 'metadata'] }, { status: 400 });
   }
 
+  // chrome_impersonate only supports GET/HEAD — fall back to fetch for other methods
+  const effectiveMethod = (method === 'chrome_impersonate' && reqMethod !== 'GET' && reqMethod !== 'HEAD')
+    ? 'fetch' : method;
+
   const start = Date.now();
-  console.log(`[proxy] ${reqMethod} ${targetUrl} mode=${mode} method=${method}`);
+  console.log(`[proxy] ${reqMethod} ${targetUrl} mode=${mode} method=${effectiveMethod}${effectiveMethod !== method ? ` (fallback from ${method})` : ''}`);
 
   try {
-    const result = await fetchTarget(targetUrl, method, userAgent, reqMethod, reqBody);
+    const result = await fetchTarget(targetUrl, effectiveMethod, userAgent, reqMethod, reqBody, customHeaders, followRedirects, timeoutMs);
     const elapsedMs = Date.now() - start;
 
-    // Extract TLS fingerprint from response body if it's a TLS echo service
-    let tlsSeenByServer = null;
-    try {
-      const bodyText = result.body.toString('utf8');
-      if (bodyText.includes('ja3_hash') || bodyText.includes('ja3')) {
-        const j = JSON.parse(bodyText);
-        if (j.tls?.ja3_hash) {
-          tlsSeenByServer = {
-            ja3_hash: j.tls.ja3_hash,
-            ja4: j.tls.ja4,
-            http_version: j.http_version,
-            ip: j.ip,
-            ciphers_count: j.tls?.ciphers?.length,
-            extensions_count: j.tls?.extensions?.length,
-          };
-        }
-      }
-    } catch {}
+    const tlsSeenByServer = extractTlsFingerprint(result.body);
 
     // Metadata mode: discard body, return only headers + TLS info
     if (headersOnly) {
@@ -304,12 +381,14 @@ export default async function handler(req, context) {
         tls_local: result.tls,
         tls_seen_by_server: tlsSeenByServer,
         elapsed_ms: elapsedMs,
+        redirected: result.redirected,
+        final_url: result.final_url,
       });
     }
 
     // Blob mode: store body, return metadata
     if (mode === 'blob') {
-      const blobKey = await storeResult(result.body, result.content_type, targetUrl, method, result.status);
+      const blobKey = await storeResult(result.body, result.content_type, targetUrl, effectiveMethod, result.status, reqMethod);
       console.log(`[proxy] blob: blob_key=${blobKey} size=${result.body.length} ms=${elapsedMs}`);
       return Response.json({
         target_url: targetUrl,

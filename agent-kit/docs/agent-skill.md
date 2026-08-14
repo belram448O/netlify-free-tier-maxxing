@@ -1203,3 +1203,138 @@ The `blob.blob_key` can then be used to fetch the actual scraped content via the
 curl -H "Authorization: Bearer $TOKEN" \
   "https://api.netlify.com/api/v1/blobs/$SITE_ID/site:function-scrapes/scrape-1786744488767"
 ```
+
+---
+
+# Addendum 4: Production Download Service + Proxy (Validated 2026-08-14T23:10Z)
+
+## Two production-grade services now in agent-kit
+
+### 1. Download Service (`functions/download.mjs` + `plugins/process-queue/index.js`)
+
+**Architecture:**
+- Function handles queue submission, status queries, result retrieval, cancellation (fast operations)
+- Build plugin (`process-queue`) handles actual downloading for async/long-running jobs (up to 15 min/cap)
+- Sync mode (small files, <30s): function downloads inline
+- Async mode (large files, >30s): function queues to blob, returns immediately, build plugin processes
+
+**Endpoints:**
+```
+POST   /api/download?url=<url>[&async=1][&method=fetch|chrome_impersonate][&ua=...][&timeout=N]
+GET    /api/download?job_id=<id>
+GET    /api/download?job_id=<id>&result=1     (raw bytes passthrough)
+GET    /api/download?list=1[&status=pending|complete|error]
+DELETE /api/download?job_id=<id>
+```
+
+**State machine:**
+```
+pending → downloading → complete | error | cancelled
+```
+
+**Storage layout** (Blobs, store=`download-jobs`):
+- `queue/pending/{job_id}` — job spec (URL, method, UA, attempts)
+- `status/{job_id}` — current status JSON
+- `result/{job_id}` — raw downloaded bytes (with metadata)
+- `index/latest` — pointer to most recent job
+
+**Retry logic:** Failed jobs retry up to 3 times (attempts counter incremented in queue blob). Stale `downloading` jobs (>10 min old) auto-requeue.
+
+**Long-running architecture:**
+- 1 concurrent build on Free plan = serialized queue processing (no race conditions)
+- Each build processes up to 50 jobs or until 14 min elapsed (1 min buffer under 15 min cap)
+- GitHub Actions cron triggers preview deploys every N minutes → processes queue
+
+**Verified test results:**
+- Sync mode: 5KB download in 109ms, blob stored, retrieved successfully
+- Async mode: queued immediately (HTTP 202, 0.5s), processed by next build, status complete
+- Chrome impersonate: JA3 hash `947eccbc4e2adea862cd37bf77342106` (Chrome-like)
+- List endpoint: returns all jobs sorted by updated_at desc
+
+### 2. API/Request Proxy (`functions/proxy.mjs`)
+
+**Endpoints:**
+```
+ANY  /api/proxy?url=<url>[&mode=direct|blob|metadata][&method=fetch|chrome_impersonate]
+                  [&ua=...][&timeout=N][&follow_redirects=0][&h_<header>=<value>]
+GET  /api/proxy?blob_key=<key>              (retrieve stored blob)
+GET  /api/proxy?list=1[&limit=N]           (list recent results)
+```
+
+**Response modes:**
+
+| Mode | Behavior | Cost | Use case |
+|---|---|---|---|
+| `direct` (default) | Returns response body inline (passthrough) | 20 cr/GB egress | Small responses, low-latency |
+| `blob` | Stores in blob, returns metadata + `blob_key` | **0 credits** | Large responses, async retrieval |
+| `metadata` | Returns ONLY headers + TLS fingerprint, discards body | ~0 | HEAD-like inspection, JA3 verification |
+
+**Custom headers:** Pass as query params prefixed with `h_`:
+- `&h_authorization=Bearer+xxx`
+- `&h_x_api_key=abc123`
+- `&h_accept=application/json`
+
+**Verified test results:**
+- Direct mode: example.com HTML returned inline (559 bytes)
+- Blob mode: stored, retrieved via `?blob_key=...`
+- Metadata mode: returns upstream headers + TLS info, body discarded
+- Chrome impersonate: JA3 `947eccbc4e2adea862cd37bf77342106`, TLS 1.3, h2 ALPN
+- POST request: body forwarded correctly (httpbin echoed it back)
+- Custom headers: `Authorization: Bearer mytoken` and `X-Custom-Header: test123` both forwarded
+
+## Function invocation cost — confirmed cheap, not free
+
+Per docs: compute = `10 credits / GB-hour` = wall-clock × memory.
+
+For a typical function invocation (1024 MB memory, 200ms wall-clock):
+- 1 GB × 0.0000556 hours × 10 credits/GB-hr = **~0.0006 credits per invocation**
+- ~1,800 invocations per credit
+- ~540,000 invocations to exhaust 300-credit monthly Free allotment (compute-only)
+- ~18,000 invocations/day capacity
+
+**Bottom line:** Multiple invocations are fine for short work. The "free maxxing bonus" is that Netlify meters on compute time (wall-clock × memory), NOT on invocation count. You can call the function 1,000 times if each call is 100ms — total cost ~0.06 credits.
+
+## Critical: `external_node_modules` + `included_files` for native binaries
+
+To use `tls-impersonate` (or any package with native bindings) in a Netlify Function, you MUST:
+
+1. **Use `node_bundler = "zisi"`** (NOT esbuild — esbuild strips native binaries)
+2. **Declare `external_node_modules = ["tls-impersonate"]`** in `netlify.toml [functions]`
+3. **Declare `included_files = ["functions/node_modules/**"]`** so zisi includes the deps
+4. **Install deps in `functions/` subdirectory** (not root) — `cd functions && npm install`
+5. **Use `.mjs` extension** for ESM-only packages (tls-impersonate is ESM)
+6. **Add `allowScripts` to `functions/package.json`** so native binary postinstall runs:
+
+```json
+{
+  "name": "functions",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@netlify/blobs": "^8.0.0",
+    "tls-impersonate": "^0.1.0"
+  },
+  "allowScripts": {
+    "tls-impersonate": true
+  }
+}
+```
+
+Without `allowScripts`, npm blocks the `node-gyp-build` postinstall script and the native binary doesn't get resolved.
+
+## Critical: Build plugin runs in onPostBuild (NOT build.command)
+
+The build command phase does NOT have `NETLIFY_BLOBS_CONTEXT` env var. Only the build plugin's `onPostBuild` hook has it. So:
+- Don't try to write to Blobs from `build.command` (e.g., `node src/build-scraper.js` can't write to Blobs directly)
+- Use a plugin's `onPostBuild` to read `/tmp/` files written by build.command, then write to Blobs
+- Same applies for queue processing — `process-queue` plugin runs in `onPostBuild`
+
+```toml
+# netlify.toml
+[build]
+  command = "node src/build-scraper.js"   # Writes to /tmp/, no Blobs access
+  publish = "src"
+
+[[plugins]]
+  package = "./plugins/store-data"   # Reads /tmp/, writes to Blobs in onPostBuild
+```
