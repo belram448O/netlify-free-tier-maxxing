@@ -6,5 +6,8 @@
   "dependencies": {
     "@netlify/blobs": "^8.0.0",
     "tls-impersonate": "^0.1.0"
+  },
+  "allowScripts": {
+    "tls-impersonate": true
   }
 }
