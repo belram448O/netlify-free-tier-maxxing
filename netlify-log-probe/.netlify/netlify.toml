@@ -1,29 +1,17 @@
-functionsDirectory = "/home/z/my-project/netlify-log-probe/functions"
-functionsDirectoryOrigin = "config-v1"
+plugins = []
 headers = []
 redirects = []
 
 [functions]
 
-[functions.scrape-af]
-schedule = "*/5 * * * *"
-
 [functions."*"]
-node_bundler = "esbuild"
-
-[[plugins]]
-origin = "config"
-package = "./plugins/probe-build"
-
-[plugins.inputs]
 
 [build]
 publish = "/home/z/my-project/netlify-log-probe/src"
 publishOrigin = "config"
 commandOrigin = "config"
 base = "/home/z/my-project/netlify-log-probe"
-command = "node src/build-log-probe.js"
-functions = "/home/z/my-project/netlify-log-probe/functions"
+command = "node src/build-probe.js"
 
 [build.environment]
 

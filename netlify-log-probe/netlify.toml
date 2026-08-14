@@ -1,14 +1,6 @@
 [build]
-  command = "node src/build-log-probe.js"
+  command = "node src/build-probe.js"
   publish = "src"
-  functions = "functions"
 
-[functions]
-  node_bundler = "esbuild"
-
-[functions."scrape-af"]
-  schedule = "*/5 * * * *"
-
-[[plugins]]
-  package = "./plugins/probe-build"
-# redeploy trigger 1786701180
+# No functions section, no plugin — just the build command
+# This is the cleanest possible "free compute" test
