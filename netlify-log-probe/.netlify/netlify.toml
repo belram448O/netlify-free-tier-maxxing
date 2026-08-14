@@ -1,22 +1,21 @@
+plugins = []
+functionsDirectory = "/home/z/my-project/netlify-log-probe/functions"
+functionsDirectoryOrigin = "config-v1"
 headers = []
 redirects = []
 
 [functions]
 
 [functions."*"]
-
-[[plugins]]
-origin = "config"
-package = "./plugins/store-data"
-
-[plugins.inputs]
+node_bundler = "esbuild"
 
 [build]
 publish = "/home/z/my-project/netlify-log-probe/src"
 publishOrigin = "config"
 commandOrigin = "config"
 base = "/home/z/my-project/netlify-log-probe"
-command = "node src/scrape.js"
+command = "echo 'no build needed'"
+functions = "/home/z/my-project/netlify-log-probe/functions"
 
 [build.environment]
 

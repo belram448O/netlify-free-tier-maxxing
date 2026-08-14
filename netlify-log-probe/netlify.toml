@@ -1,6 +1,7 @@
 [build]
-  command = "node src/scrape.js"
+  command = "echo 'no build needed'"
   publish = "src"
+  functions = "functions"
 
-[[plugins]]
-  package = "./plugins/store-data"
+[functions]
+  node_bundler = "esbuild"

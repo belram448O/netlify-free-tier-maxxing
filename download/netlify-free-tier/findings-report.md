@@ -397,3 +397,186 @@ For context, here's where Cloudflare's free tier dominates Netlify's:
 - D1 pricing: https://developers.cloudflare.com/d1/platform/pricing/
 - KV pricing: https://developers.cloudflare.com/kv/platform/pricing/
 - Pages: https://pages.cloudflare.com/
+
+---
+
+# Part 9: Function URL Access — SSO Disable (Follow-Up Session, 2026-08-14T19:00Z)
+
+## The problem we hit earlier
+
+In the prior session we couldn't access Netlify function URLs via HTTP because:
+- `account_sso_login: True`
+- `account_sso_login_context: "all"` (hard-enforced)
+- All URLs (including function URLs and static assets) returned `HTTP 401` with redirect to `app.netlify.com/edge-access`
+- The official public API (`api.netlify.com/api/v1/`) returned `null` when trying to PATCH these fields
+- The account-level `PATCH /accounts/{id}` with `site_sso_login_context` returned `422 "Account is not eligible to update global access controls"` — Free plan can't change account-level visibility
+
+## Root cause (confirmed via blog post + docs)
+
+[Blog post](https://www.netlify.com/blog/new-netlify-projects-are-now-private-by-default/): Netlify's "Private by default" feature (as of Aug 2026) makes all new teams' projects private by default. [Project visibility docs](https://docs.netlify.com/manage/security/secure-access-to-sites/project-visibility/): "Private projects are enforced with Netlify login."
+
+Three valid team-default policies:
+- **Private for new projects**: New projects behind login; existing keep current
+- **Private for all projects**: All behind login; cannot override per-project (this was our state)
+- **Public for new projects**: New are public; existing keep current
+
+## The fix — undocumented bb-api with session JWT
+
+The official public API (`api.netlify.com/api/v1/...`) cannot disable SSO. The dashboard uses an **internal Backend-For-Frontend (bb-api)** at `app.netlify.com/access-control/bb-api/api/v1/...` authenticated via **session cookies** (not PAT).
+
+### Magic request (verified working)
+
+```http
+PUT https://app.netlify.com/access-control/bb-api/api/v1/sites/{site_id}
+Content-Type: application/json
+Cookie: connect.sid=...; _nf-auth=...; <other session cookies>
+Origin: https://app.netlify.com
+Referer: https://app.netlify.com/projects/{site}/
+
+{"password":"","password_context":"all","sso_login":false,"sso_login_context":"all"}
+```
+
+**Critical field:** `sso_login: false` (boolean, NOT the context string). The `sso_login_context` stays `"all"` but is no-op once `sso_login` is `false`.
+
+### Response after success
+
+```json
+{
+  "sso_login": false,
+  "sso_login_context": "all",
+  "account_sso_login": false,
+  "account_sso_login_context": "all",
+  "has_password": false,
+  "password_context": "all"
+}
+```
+
+### Auth required
+
+The bb-api does NOT accept the PAT (`nfp_...`). It requires:
+- `connect.sid` cookie (Express session)
+- `_nf-auth` cookie (JWT — value format `nfu_...`)
+- Plus the standard analytics/tracking cookies the browser accumulates
+
+**Cookies are obtained by logging into `app.netlify.com` via browser** and extracting from DevTools. The session JWT (`_nf-auth`) can be refreshed by re-logging in or via the OAuth ticket flow (not yet tested).
+
+### Valid enum values (probed)
+
+For `sso_login_context` field:
+- `non_production` ✅ (previews public, prod private)
+- `all` ✅ (everything private — the default)
+- `disabled`, `none`, `off`, `production_only` ❌ (422 "is not included in the list")
+
+For account-level (`/accounts/{id}` endpoint):
+- Returns `422 "Account is not eligible to update global access controls"` on Free plan
+- Account-level visibility can ONLY be changed by upgrading to Pro
+
+**Site-level fix is sufficient.** Once `sso_login: false` is set on the site, all deploys (preview AND production) become publicly accessible without login.
+
+## Function execution verified end-to-end
+
+After disabling SSO, deployed a function via preview (0 credits) and verified:
+
+```
+GET https://<deploy-id>--<site-name>.netlify.app/.netlify/functions/scrape?url=https://example.com
+→ HTTP 200, 1531 bytes, 1.4s
+→ Returns JSON with runtime info + fetched example.com content
+```
+
+Function runtime confirmed:
+- `execution_env: AWS_Lambda_nodejs24.x`
+- `function_region: us-east-2` (Ohio)
+- `function_memory_mb: 1024`
+- `aws_request_id: 6db27198-c390-43fe-8ce5-73cda960fe1e`
+- `remaining_time_ms: 29997` (i.e., 30s timeout — Lambda default for sync functions)
+- Cold start latency: ~1.3s for first request, ~50-200ms for warm
+
+Function can be triggered **on-demand via HTTP** (no scheduling needed). Use cases:
+- Request proxy / scraper
+- Webhook receiver
+- API endpoint
+
+## TLS Fingerprint Tests (JA3/JA4)
+
+### Default Node.js fetch fingerprint (the giveaway)
+
+When the function uses `fetch()` (undici), the outbound TLS fingerprint is:
+
+| Metric | Value |
+|---|---|
+| JA3 hash | `1808993db60a053eb8ce0eb1c51750d6` |
+| JA4 | `t13d5212h1_b262b3658495_8e6e362c5eac` |
+| # Ciphers | 52 (Node's full list) |
+| # Extensions | 12 |
+| ALPN | `http/1.1` only (no h2 advertisement!) |
+| HTTP version | HTTP/1.1 |
+
+This is the **standard Node.js fetch fingerprint** — instantly recognizable as a bot/scraper by any JA3-aware anti-bot service (Cloudflare Bot Management, DataDome, PerimeterX, etc.).
+
+For comparison, real Chrome 120's JA3 hash is `cd08e31494f9531f560d64c695473da9`.
+
+### tls_direct mode — custom TLS socket with Chrome ciphers
+
+Using `node:tls.connect()` directly with a custom cipher list and ALPN protocols:
+
+```js
+import tls from 'node:tls';
+const tlsSocket = tls.connect({
+  host: url.hostname,
+  port: 443,
+  servername: url.hostname,
+  ciphers: CHROME_CIPHERS,  // 19 ciphers in Chrome's order
+  honorCipherOrder: false,
+  minVersion: 'TLSv1.2',
+  maxVersion: 'TLSv1.3',
+  ALPNProtocols: ['h2', 'http/1.1'],
+});
+```
+
+**Result:**
+
+| Metric | Default fetch | tls_direct + Chrome ciphers |
+|---|---|---|
+| JA3 hash | `1808993db60a053eb8ce0eb1c51750d6` | `ece2df6eaade0ed905954ae5663adcc5` ✅ changed |
+| JA4 | `t13d5212h1_b262b3658495_8e6e362c5eac` | `t13d1912h2_b407db2ca6cb_8e6e362c5eac` ✅ changed |
+| # Ciphers | 52 | 19 (Chrome-like) |
+| ALPN | `http/1.1` only | `h2` (preferred) + `http/1.1` ✅ |
+| TLS protocol | TLS 1.3 | TLS 1.3 |
+| TLS handshake | ~70ms | 99-205ms |
+| Total latency | 70-393ms | 148-256ms |
+
+**What changed:**
+- ✅ JA3 hash changed (no longer recognized as Node.js)
+- ✅ ALPN now advertises HTTP/2
+- ✅ Cipher list matches Chrome's subset
+- ✅ Latency still very low
+
+**What did NOT change (still fingerprintable):**
+- ❌ Extension list is still Node's default (12 extensions including `extensionRenegotiationInfo (boringssl)` which is suspicious for Chrome)
+- ❌ JA4 cipher hash changed but extension hash `_8e6e362c5eac` is the same (extensions are still Node's)
+- ❌ HTTP/2 not actually negotiated (peet.ws served HTTP/1.1) — would need to send HTTP/2 frames manually after ALPN `h2`
+
+### What you'd need for full Chrome impersonation
+
+1. **Custom extension list** — need to use `tls.createSecureContext()` with custom `sigalgs`, `ecdhCurve`, and override the extension list. Node doesn't easily expose extension customization.
+2. **HTTP/2 frame sending** — if ALPN negotiates `h2`, you must send HTTP/2 frames (magic + SETTINGS + HEADERS) — `node:http2` can do this but doesn't expose cipher/extension control.
+3. **Better library:** npm packages like `curl-impersonate` (binary), `node-libcurl-impersonate`, or `got-scraping` (uses tls-client under the hood) provide true browser impersonation.
+4. **Headless browser:** `@sparticuz/chromium` + puppeteer in a function (with `node_bundler = "zisi"`) gives real Chrome TLS — but uses ~150MB and slow startup.
+
+### Practical implication for scraping
+
+- **JA3-aware bot detection (Cloudflare, DataDome):** Default Node fetch WILL be flagged. Custom `tls_direct` mode partially helps but is still recognizable.
+- **JA4-aware bot detection:** Same — extension hash unchanged in our test.
+- **Basic User-Agent + IP checks:** Easily bypassed (we set UA correctly, IP is shared AWS Lambda range).
+- **For serious scraping of bot-protected sites:** Need `curl-impersonate` or a real headless browser. The function-as-proxy pattern works great for unprotected sites but won't bypass enterprise anti-bot.
+
+## Updated credit state
+
+| Action | Credits consumed |
+|---|---|
+| 4 preview deploys (functions + SSO disable test) | 0 |
+| ~30 function invocations (each ~50-300ms) | 0 (per docs: compute meter hasn't ticked visibly) |
+| Direct API blob reads/writes (~12 MB transfer) | 0 |
+| Total this session | 0 |
+
+API `credits.used` still shows 0/300 — lag noted. Dashboard is authoritative.

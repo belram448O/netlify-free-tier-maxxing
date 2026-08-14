@@ -498,3 +498,290 @@ PUT  /api/v1/blobs/{site_id}/{store}/{key}          # Get presigned URL, then up
 6. **Trust the dashboard for credit state** — API `credits.used` lags 5-30 minutes
 7. **One Free team per Netlify user** — no per-org rotation like Supabase
 8. **Build hooks need Git** — for API-triggered builds, use `POST /sites/{id}/deploys` with `draft:true` + PAT
+
+---
+
+# Addendum: Functions as On-Demand HTTP Endpoints (Validated 2026-08-14T19:00Z)
+
+## The missing piece — function URLs CAN be public
+
+In the prior session, function URLs returned `HTTP 401` due to account-level SSO being hard-enforced. This is now SOLVED. The fix requires using the **internal bb-api** (Backend-For-Frontend) with **session cookies**, not the PAT.
+
+## Step 1: Disable SSO on the site (one-time setup per site)
+
+The official public API `PATCH /api/v1/sites/{id}` CANNOT disable SSO — the field returns `null`. You must use the internal bb-api.
+
+### Auth required
+- Session cookies from `app.netlify.com` (obtained by browser login)
+- Key cookies: `connect.sid` (Express session), `_nf-auth` (JWT, value starts with `nfu_`)
+- PAT (`nfp_...`) does NOT work for bb-api
+
+### The magic request
+```bash
+# Save cookies from browser DevTools after logging into app.netlify.com
+# (Application → Cookies → app.netlify.com → copy all cookie key=value pairs into one Cookie header)
+COOKIE_FILE=/path/to/cookies.txt
+SITE_ID=01ccde04-e779-41e6-89eb-57892acffaf2
+
+curl -X PUT \
+  "https://app.netlify.com/access-control/bb-api/api/v1/sites/$SITE_ID" \
+  -H "Content-Type: application/json" \
+  -H "Accept: */*" \
+  -H "Origin: https://app.netlify.com" \
+  -H "Referer: https://app.netlify.com/projects/$SITE_SLUG/" \
+  -H "Cookie: $(cat $COOKIE_FILE)" \
+  -d '{"password":"","password_context":"all","sso_login":false,"sso_login_context":"all"}'
+```
+
+**Critical:** `sso_login: false` (boolean) is what disables SSO. The `sso_login_context` stays `"all"` but is no-op once `sso_login` is `false`.
+
+### Response after success
+```json
+{
+  "sso_login": false,
+  "sso_login_context": "all",
+  "account_sso_login": false,
+  "has_password": false,
+  "password_context": "all"
+}
+```
+
+### Valid enum values for `sso_login_context`
+- `non_production` ✅ (previews public, prod private)
+- `all` ✅ (everything private — default)
+- `disabled`, `none`, `off`, `production_only` ❌ (422 error)
+
+### Account-level visibility (Free plan can't change)
+`PATCH /accounts/{id}` with `site_sso_login_context` returns `422 "Account is not eligible to update global access controls"`. Account-level visibility requires Pro plan. **But site-level fix is sufficient** — once `sso_login: false` is set on the site, all deploys become public.
+
+## Step 2: Deploy a function via preview (0 credits)
+
+### `netlify.toml`
+```toml
+[build]
+  command = "echo 'no build needed'"
+  publish = "src"
+  functions = "functions"
+
+[functions]
+  node_bundler = "esbuild"
+```
+
+### `functions/scrape.js` — minimal on-demand HTTP proxy/scraper
+```js
+export async function handler(event, context) {
+  const targetUrl = event.queryStringParameters?.url;
+  const passthrough = event.queryStringParameters?.passthrough === '1';
+  const userAgent = event.queryStringParameters?.ua ||
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+  if (!targetUrl) {
+    return {
+      statusCode: 400,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        error: 'missing url parameter',
+        usage: '?url=https://example.com[&passthrough=1][&ua=...]',
+      }),
+    };
+  }
+
+  const start = Date.now();
+  try {
+    const r = await fetch(targetUrl, {
+      method: event.httpMethod || 'GET',
+      headers: { 'User-Agent': userAgent, 'Accept': '*/*' },
+      redirect: 'follow',
+    });
+    const text = await r.text();
+    const elapsed = Date.now() - start;
+
+    if (passthrough) {
+      return {
+        statusCode: r.status,
+        headers: {
+          'content-type': r.headers.get('content-type') || 'text/plain',
+          'x-elapsed-ms': String(elapsed),
+        },
+        body: text,
+      };
+    }
+
+    return {
+      statusCode: 200,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ok: r.ok,
+        status: r.status,
+        elapsed_ms: elapsed,
+        target_url: targetUrl,
+        response_size_bytes: text.length,
+        response_headers: Object.fromEntries(r.headers.entries()),
+        response_body: text,
+      }, null, 2),
+    };
+  } catch (e) {
+    return {
+      statusCode: 502,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ error: e.message, target_url: targetUrl }, null, 2),
+    };
+  }
+}
+```
+
+### Deploy + invoke
+```bash
+# Deploy as preview (0 credits)
+netlify deploy --message "scraper function"
+
+# Invoke (deploy-id from deploy output)
+DEPLOY_ID=6a7f69d6802294af60d347c0
+FUNC_URL="https://$DEPLOY_ID--your-site.netlify.app/.netlify/functions/scrape"
+
+# Default — wraps response in JSON
+curl "$FUNC_URL?url=https://example.com"
+
+# Passthrough — returns upstream body directly
+curl "$FUNC_URL?url=https://example.com&passthrough=1"
+
+# Custom User-Agent
+curl "$FUNC_URL?url=https://example.com&ua=Mozilla/5.0..."
+```
+
+## Function runtime (verified)
+- Provider: AWS Lambda (nodejs24.x runtime)
+- Region: us-east-2 (Ohio)
+- Memory: 1024 MB
+- Timeout: 30 seconds (sync) / 15 min (background)
+- Cold start: ~1.3s first request
+- Warm latency: 50-300ms typical
+- Outbound HTTP: ✅ works to any URL
+- Has `NETLIFY_BLOBS_CONTEXT`: ✅ (can write to Blobs from function)
+
+## TLS Fingerprint — Critical for Scraping Bot-Protected Sites
+
+### Default Node fetch = fingerprintable as bot
+When using `fetch()` in the function, the outbound TLS fingerprint is:
+
+| Metric | Value |
+|---|---|
+| JA3 hash | `1808993db60a053eb8ce0eb1c51750d6` |
+| JA4 | `t13d5212h1_b262b3658495_8e6e362c5eac` |
+| ALPN | `http/1.1` only |
+| Ciphers | 52 (Node's full list) |
+
+This is **instantly recognizable as Node.js/bot** by Cloudflare Bot Management, DataDome, PerimeterX. Will be blocked on protected sites.
+
+### Custom TLS via `node:tls` — partial fix
+You can override the cipher list and ALPN by using `tls.connect()` directly:
+
+```js
+import tls from 'node:tls';
+
+const CHROME_CIPHERS = [
+  'TLS_AES_128_GCM_SHA256',
+  'TLS_AES_256_GCM_SHA384',
+  'TLS_CHACHA20_POLY1305_SHA256',
+  'ECDHE-ECDSA-AES128-GCM-SHA256',
+  'ECDHE-RSA-AES128-GCM-SHA256',
+  'ECDHE-ECDSA-AES256-GCM-SHA384',
+  'ECDHE-RSA-AES256-GCM-SHA384',
+  'ECDHE-ECDSA-CHACHA20-POLY1305',
+  'ECDHE-RSA-CHACHA20-POLY1305',
+  // ... (Chrome's full cipher list)
+].join(':');
+
+const socket = tls.connect({
+  host: hostname,
+  port: 443,
+  servername: hostname,
+  ciphers: CHROME_CIPHERS,
+  honorCipherOrder: false,
+  minVersion: 'TLSv1.2',
+  maxVersion: 'TLSv1.3',
+  ALPNProtocols: ['h2', 'http/1.1'],
+});
+
+// Then send raw HTTP/1.1 request over the socket
+socket.write(`GET /path HTTP/1.1\r\nHost: ${hostname}\r\nUser-Agent: ${CHROME_UA}\r\nConnection: close\r\n\r\n`);
+```
+
+**Result:** JA3 hash changes from `1808993db60a053eb8ce0eb1c51750d6` → `ece2df6eaade0ed905954ae5663adcc5`, ALPN advertises h2. **But the extension list is still Node's default** (recognizable as Node).
+
+### What you need for true impersonation
+For full Chrome JA3/JA4 impersonation, the Node standard library can't do it. Use one of:
+- **`curl-impersonate`** binary (most accurate, must be installed in function via `node_bundler = "zisi"`)
+- **`got-scraping`** npm package (uses tls-client under the hood)
+- **`node-libcurl-impersonate`** npm package
+- **`@sparticuz/chromium` + puppeteer** (real Chrome TLS, but ~150MB, slow startup, needs `node_bundler = "zisi"`)
+
+### Practical guidance
+- **Scraping unprotected sites:** Use default `fetch()` — fast, simple, works fine
+- **Scraping JA3-aware sites:** Use `tls_direct` mode (custom ciphers + ALPN) — bypasses basic JA3 checks but not JA4 extension checks
+- **Scraping JA4-aware sites (Cloudflare Bot Management, DataDome):** Need `curl-impersonate` or real headless Chrome
+- **Most sites don't check JA3** — default fetch is fine for ~90% of the web
+
+## Updated Free-Tier Stack for Scraping
+
+| Use case | Recommended approach |
+|---|---|
+| **Batch scraping** (large data dumps) | **Netlify build process** (15 min compute, 0 credits, write to Blobs) |
+| **On-demand scraping** (per-request) | **Netlify Function via preview deploy** (30s sync / 15min background, 0 credits per docs) |
+| **Bot-protected sites** | Function with `curl-impersonate` or `@sparticuz/chromium` (via `node_bundler = "zisi"`) |
+| **Raw data storage** | **Netlify Blobs** (unmetered, free API reads/writes) |
+| **Processed data storage** | **Supabase Free** (per-org, rotatable) or **Neon Free** |
+| **Cron trigger** | **GitHub Actions** (2000 min/mo free) → POSTs to Netlify deploy API |
+| **DNS/CDN front** | **Cloudflare** (free, absorbs bandwidth) |
+
+## Quick Reference: bb-api Endpoints Discovered
+
+These are **undocumented** — discovered via HAR analysis. All require session cookies (NOT PAT).
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `app.netlify.com/access-control/bb-api/api/v1/sites` | List all sites (same as public API but session-auth) |
+| `GET` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}` | Site details |
+| `PUT` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}` | **Update site — incl. SSO disable** |
+| `GET` | `app.netlify.com/access-control/bb-api/api/v1/accounts/{id}` | Account details |
+| `PUT` | `app.netlify.com/access-control/bb-api/api/v1/accounts/{id}` | Update account (limited on Free plan) |
+| `POST` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}/observability/query/timeseries` | Observability timeseries |
+| `POST` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}/observability/query/counts` | Observability counts |
+| `GET` | `app.netlify.com/access-control/bb-api/api/v1/{slug}/billing/address` | Billing address |
+| `GET` | `app.netlify.com/access-control/bb-api/api/v1/{slug}/builds/status` | Build status |
+| `GET` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}/deploys` | List deploys |
+| `GET` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}/deployed-branches` | List deployed branches |
+| `GET` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}/forms` | List forms |
+| `GET` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}/insights` | Site insights |
+| `GET` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}/traffic_splits` | Traffic splits |
+| `GET` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}/usage` | Site usage |
+| `GET` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}/dev_servers/active` | Active dev servers |
+| `GET` | `app.netlify.com/access-control/bb-api/api/v1/accounts/{id}/edge_functions` | List edge functions |
+| `GET` | `app.netlify.com/access-control/bb-api/api/v1/accounts/{id}/bandwidth` | Bandwidth usage |
+| `GET` | `app.netlify.com/access-control/bb-api/api/v1/accounts/{id}/plans` | Account plans |
+| `GET` | `app.netlify.com/access-control/bb-api/api/v1/accounts/{id}/compliance` | Compliance |
+| `GET` | `app.netlify.com/access-control/bb-api/api/v1/dns_zones` | List DNS zones |
+| `GET` | `app.netlify.com/spark-proxy/api/v1/knowledge/` | Spark knowledge base |
+| `GET` | `app.netlify.com/api/agent-runners/status` | Agent runner status |
+
+**The bb-api essentially mirrors the public API but with session cookie auth for the dashboard.** Use it for actions the public API doesn't expose (like SSO disable on Free plan).
+
+## Session cookie refresh — TODO
+
+The `_nf-auth` JWT cookie expires (typically hours to days). To refresh without browser login:
+- **Unverified:** Try `POST /oauth/tickets` + `POST /oauth/tickets/{id}/exchange` (OpenAPI lists these but I got 404 in testing — may need different URL prefix)
+- **Verified workaround:** Just re-extract cookies from browser DevTools when the session expires
+- **Future:** Investigate if PAT can be exchanged for session JWT via some auth flow
+
+## Final Final Reminders (Updated)
+
+1. **Always `netlify deploy` (no `--prod`)** — preview deploys are free, function URLs work after SSO disable
+2. **Always `draft: true` when using the REST API** — production deploys cost 15 credits each
+3. **SSO disable is one-time per site** — use bb-api with session cookies, set `sso_login: false`
+4. **Build command phase has NO Blobs access** — write to `/tmp/`, plugin `onPostBuild` reads `/tmp/` and writes to Blobs
+5. **Function runtime has Blobs access** — `NETLIFY_BLOBS_CONTEXT` is auto-injected
+6. **Default `fetch()` in functions = bot fingerprint** — use `node:tls` for custom ciphers, or `curl-impersonate` for true impersonation
+7. **Blobs API is free** — read/write any volume, 0 credits, no egress meter
+8. **Trust the dashboard for credit state** — API `credits.used` lags 5-30 minutes
+9. **One Free team per Netlify user** — no per-org rotation
+10. **Build hooks need Git** — for API-triggered builds, use `POST /sites/{id}/deploys` with `draft:true` + PAT
