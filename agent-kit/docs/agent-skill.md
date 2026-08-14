@@ -1008,3 +1008,198 @@ Free plan capacity: ~500,000 scrapes/month
 - ❌ Returning large response bodies from functions — costs 20 cr/GB egress
 - ❌ Using `curl-cffi-node` — glibc 2.38 mismatch with Lambda runtime
 - ❌ Trusting API `credits.used` for real-time state — lag 5-30+ min, use dashboard
+
+---
+
+# Addendum 3: Function Logs as a Third Free Egress Channel (Validated 2026-08-14T22:00Z)
+
+## The 3 free egress channels (recap)
+
+| Channel | Cost | Size limit | Persistence | Best for |
+|---|---|---|---|---|
+| **Blobs API** (`GET /api/v1/blobs/...`) | 0 credits | 5 GB per object | Persistent (no expiry) | Large data, raw scraped content |
+| **Function logs** (`netlify logs --json`) | 0 credits | 4 KB per invocation | 24h (Free plan) | Small structured records, audit trail |
+| **Function HTTP response** | Bandwidth (20 cr/GB) | Lambda response limit | Immediate | Tiny status / pointer responses |
+
+## Function logs ARE a free egress channel — verified
+
+`console.log()` output from functions is captured by Netlify's observability stack and retrievable via the CLI. This works for v1 ESM handlers (`.mjs` with `export async function handler(event, context)`).
+
+### Function pattern (writes to logs)
+
+```js
+// functions/log-exfil.mjs
+export async function handler(event, context) {
+  const data = event.queryStringParameters?.data || 'default';
+  const requestId = context?.awsRequestId;
+
+  // Log structured JSON lines — each line is a separate log entry
+  console.log('==========DATA_START==========');
+  console.log(JSON.stringify({
+    request_id: requestId,
+    timestamp: new Date().toISOString(),
+    payload: data,
+  }));
+  console.log('==========DATA_END==========');
+
+  // Multiple records — each is a separate log line
+  for (let i = 0; i < 5; i++) {
+    console.log(`record_${i}=${JSON.stringify({ idx: i, value: Math.random() })}`);
+  }
+
+  // console.error is captured with level="error"
+  console.error('THIS_IS_AN_ERROR_LOG');
+
+  return {
+    statusCode: 200,
+    body: JSON.stringify({ ok: true, request_id: requestId }),
+  };
+}
+```
+
+### Reader pattern (retrieves logs as JSON Lines)
+
+```bash
+# Get last hour of logs from a specific function
+netlify logs --json --since 1h --function log-exfil
+
+# Live tail (real-time)
+netlify logs --follow --function log-exfil
+
+# Filter by level
+netlify logs --json --since 24h --level error
+
+# Parse with jq — extract only JSON-parseable lines
+netlify logs --json --since 1h --function log-exfil | \
+  jq -r 'select(.message | startswith("{")) | .message' | jq .
+```
+
+### Verified output (from real test)
+
+```json
+{"source":"function","name":"log-exfil","timestamp":"2026-08-14T21:54:50.472Z","level":"info","message":"==========LOG_EXFIL_START=========="}
+{"source":"function","name":"log-exfil","timestamp":"2026-08-14T21:54:50.472Z","level":"info","message":"request_id=09c23e39-efef-44f8-9152-f359cf6913ba"}
+{"source":"function","name":"log-exfil","timestamp":"2026-08-14T21:54:50.472Z","level":"info","message":"data=hello-from-canonical"}
+{"source":"function","name":"log-exfil","timestamp":"2026-08-14T21:54:50.472Z","level":"info","message":"{\"request_id\":\"09c23e39-...\",\"timestamp\":\"2026-08-14T21:54:50.797Z\",\"payload\":\"hello-from-canonical\",\"source\":\"log-exfil-function\"}"}
+{"source":"function","name":"log-exfil","timestamp":"2026-08-14T21:54:50.472Z","level":"info","message":"record_0={\"idx\":0,\"value\":0.9221987400874553,\"ts\":\"2026-08-14T21:54:50.797Z\"}"}
+{"source":"function","name":"log-exfil","timestamp":"2026-08-14T21:54:50.472Z","level":"info","message":"==========LOG_EXFIL_END=========="}
+{"source":"function","name":"log-exfil","timestamp":"2026-08-14T21:54:50.800Z","level":"info","message":"Duration: 6.56 ms\tMemory Usage: 86 MB\tInit Duration: 157.90 ms\t"}
+```
+
+## CRITICAL: Handler style matters
+
+| Handler style | Example file | `console.log` captured? |
+|---|---|---|
+| **v1 ESM** (`.mjs`, `export async function handler(event, context)`) | `log-exfil.mjs` | ✅ Yes |
+| **v1 CommonJS** (`.js`, `exports.handler = async (event, context) => {...}`) | — | ✅ Yes |
+| **v2 modern** (`.mjs`, `export default async function handler(req, context)`) | `scrape.mjs` | ❌ No (empty INFO line only) |
+
+**For log-as-output, use v1 ESM handlers** — `export async function handler(event, context)` returning `{statusCode, body}`. The v2 modern `Request/Response` API handler doesn't expose `console.log` to Netlify's observability stack the same way.
+
+## Log retention and limits
+
+| Plan | Retention | Per-invocation cap |
+|---|---|---|
+| Free | 24 hours | 4 KB total (truncated to last 4 KB if exceeded) |
+| Personal/Pro | 7 days | 4 KB |
+| Enterprise (via Log Drains) | Configurable | 700 KB per single log entry |
+
+## Cost: 0 credits
+
+- `console.log()` from function → only the compute cost (~0.0006 cr per invocation)
+- `netlify logs` retrieval → 0 credits (CLI command, not an API meter)
+- Log storage 24h → 0 credits
+
+## When to use logs vs Blobs vs HTTP response
+
+| Use case | Best channel |
+|---|---|
+| Large scraped data (>4 KB) | Blobs |
+| Small structured records (≤4 KB) | Logs |
+| Status / pointer / metadata | HTTP response (small) |
+| Audit trail / debug | Logs (auto-timestamped) |
+| Real-time streaming | Logs (`--follow`) |
+| Persistent storage (days/weeks) | Blobs |
+
+## Combined pattern: use all 3 channels in one function
+
+```js
+export async function handler(event, context) {
+  const targetUrl = event.queryStringParameters?.url;
+  const r = await fetch(targetUrl);
+  const body = await r.text();
+
+  // 1. WRITE LARGE DATA TO BLOBS (free, persistent)
+  const { getStore } = await import('@netlify/blobs');
+  const store = getStore('scrapes');
+  const blobKey = `scrape-${Date.now()}`;
+  await store.setJSON(blobKey, { url: targetUrl, body, ts: new Date().toISOString() });
+  await store.setJSON('latest', { blob_key: blobKey });
+
+  // 2. LOG METADATA (free, 24h, structured)
+  console.log(JSON.stringify({
+    blob_key: blobKey,
+    target_url: targetUrl,
+    response_size: body.length,
+    status: r.status,
+    timestamp: new Date().toISOString(),
+  }));
+
+  // 3. RETURN SMALL RESPONSE (pointer to blob, free)
+  return {
+    statusCode: 200,
+    body: JSON.stringify({
+      ok: true,
+      blob_key: blobKey,  // Client fetches body via Blobs API
+      size: body.length,
+    }),
+  };
+}
+```
+
+**Client retrieval options:**
+```bash
+# Get the blob (large data, free, persistent)
+curl -H "Authorization: Bearer $TOKEN" \
+  "https://api.netlify.com/api/v1/blobs/$SITE_ID/site:scrapes/$BLOB_KEY"
+
+# Or read the logs (small structured data, free, 24h)
+netlify logs --json --since 1h --function <name>
+```
+
+## Function returning blob ID pattern (verified)
+
+The `scrape.mjs` function in the agent-kit now supports `return_blob=1` query param. When set, it:
+1. Scrapes the URL (using `fetch` or `chrome_impersonate`)
+2. Writes the full response body to a Netlify Blob
+3. Updates a `latest` pointer in the same store
+4. Returns a **small JSON response** with just the blob key + metadata
+
+Example call:
+```bash
+curl 'https://<deploy-id>--<site>.netlify.app/.netlify/functions/scrape?url=https://example.com&return_blob=1'
+```
+
+Example response:
+```json
+{
+  "ok": true,
+  "status": 200,
+  "target_url": "https://example.com",
+  "method": "fetch",
+  "elapsed_ms": 228,
+  "response_size": 489,
+  "tls": null,
+  "blob": {
+    "blob_key": "scrape-1786744488767",
+    "store": "function-scrapes",
+    "size_bytes": 489
+  }
+}
+```
+
+The `blob.blob_key` can then be used to fetch the actual scraped content via the free Blobs API:
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "https://api.netlify.com/api/v1/blobs/$SITE_ID/site:function-scrapes/scrape-1786744488767"
+```

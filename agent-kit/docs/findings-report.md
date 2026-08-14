@@ -824,3 +824,150 @@ So ~1,800 function invocations per credit, or ~540,000 invocations to exhaust th
 - Reading scraped data back via Blobs API = FREE
 
 **Optimal pattern:** Function scrapes → writes to Blobs (free) → returns tiny "ok" response (free) → client reads scraped data via Blobs API (free). Total cost: ~0.0006 credits per scrape (compute only) = ~500,000 scrapes/month on Free plan.
+
+---
+
+# Part 11: Function Logs as a Third Free Egress Channel (Validated 2026-08-14T22:00Z)
+
+## The discovery
+
+Function logs ARE accessible via the Netlify CLI and capture `console.log()` output from the function — confirming they can be used as a **third free egress channel** alongside Blobs API and HTTP response bodies.
+
+## How to use function logs as data exfil
+
+### Function side (writes data to logs)
+
+```js
+// functions/log-exfil.mjs — v1 ESM handler pattern
+export async function handler(event, context) {
+  const data = event.queryStringParameters?.data || 'default';
+  const ts = new Date().toISOString();
+  const requestId = context?.awsRequestId;
+
+  // Log structured JSON lines — readable via `netlify logs --json`
+  console.log('==========DATA_START==========');
+  console.log(JSON.stringify({ request_id: requestId, timestamp: ts, payload: data }));
+  console.log('==========DATA_END==========');
+
+  return {
+    statusCode: 200,
+    body: JSON.stringify({ ok: true, request_id: requestId }),
+  };
+}
+```
+
+### Reader side (retrieves logs as JSON Lines)
+
+```bash
+# Get last hour of logs as JSON Lines
+netlify logs --json --since 1h --function log-exfil
+
+# Live tail
+netlify logs --follow --function log-exfil
+
+# Filter by level (info, warn, error)
+netlify logs --json --since 24h --level error
+
+# Parse with jq
+netlify logs --json --since 1h --function log-exfil | jq -r 'select(.message | startswith("{")) | .message' | jq .
+```
+
+## Verified test results
+
+| Output type | Captured? | Notes |
+|---|---|---|
+| `console.log('HELLO')` | ✅ | Plain string |
+| `console.log(JSON.stringify({...}))` | ✅ | JSON-parseable per line |
+| `console.error('...')` | ✅ | Captured with `level: "error"` |
+| Auto-generated Duration/Memory line | ✅ | `level: "info"`, format: `Duration: X ms\tMemory Usage: Y MB` |
+| Stack traces on errors | ✅ | Multi-line, captured per line |
+| Function `Response.json()` body | ❌ | Not logged (only console.* output) |
+
+## Critical limitation: v1 vs v2 handler
+
+| Handler style | Example | `console.log` captured? |
+|---|---|---|
+| **v1 ESM** (`.mjs`, `export async function handler(event, context)`) | `log-exfil.mjs` | ✅ Yes |
+| **v1 CommonJS** (`.js`, `exports.handler = async (event, context) => {...}`) | — | ✅ Yes |
+| **v2 modern** (`.mjs`, `export default async function handler(req, context)`) | `scrape.mjs` | ❌ No (empty INFO line only) |
+
+**Use v1 ESM handlers (`.mjs` + `export async function handler`) when you need logs as egress.** The v2 modern `Request/Response` API handler doesn't expose console.log to Netlify's observability stack the same way.
+
+## Log retention and limits
+
+Per [Function logs docs](https://docs.netlify.com/build/functions/logs.md):
+
+| Plan | Retention | Per-invocation limit |
+|---|---|---|
+| Free | **24 hours** | 4 KB total (Lambda compatibility mode) |
+| Personal/Pro | 7 days | 4 KB |
+| Enterprise (via Log Drains) | Configurable | 700 KB per single log entry |
+
+If a single invocation's log output exceeds 4 KB, **only the last 4 KB is retained** — the rest is truncated. So for large data dumps, you must:
+- Chunk into multiple invocations (each ≤ 4 KB), OR
+- Use Blobs API instead (no size limit, free)
+
+## Cost: 0 credits
+
+| Action | Cost |
+|---|---|
+| `console.log()` from function | 0 credits (just compute ~0.0006 cr per invocation) |
+| `netlify logs --json` retrieval | 0 credits (CLI command, not an API meter) |
+| Log storage (24h) | 0 credits (Free plan retention) |
+
+## When to use logs vs Blobs vs HTTP response
+
+| Use case | Best channel | Why |
+|---|---|---|
+| Large scraped data (>4 KB) | **Blobs** | No size limit, free, persistent |
+| Small structured records (≤4 KB) | **Logs** | Easy to retrieve, parseable JSON Lines |
+| Status / pointer / metadata | **HTTP response** | Returns immediately, no extra call needed |
+| Audit trail / debug | **Logs** | Auto-timestamped, filterable by level |
+| Real-time streaming | **Logs (`--follow`)** | Live tail mode |
+
+## Combined scraping pattern (all 3 channels)
+
+```js
+// Function does all 3:
+export async function handler(event, context) {
+  const targetUrl = event.queryStringParameters?.url;
+  const r = await fetch(targetUrl);
+  const body = await r.text();
+
+  // 1. WRITE TO BLOBS (large data, persistent, free)
+  const { getStore } = await import('@netlify/blobs');
+  const store = getStore('scrapes');
+  const blobKey = `scrape-${Date.now()}`;
+  await store.setJSON(blobKey, { url: targetUrl, body, ts: new Date().toISOString() });
+  await store.setJSON('latest', { blob_key: blobKey });
+
+  // 2. LOG METADATA (small structured data, 24h retention, free)
+  console.log(JSON.stringify({
+    blob_key: blobKey,
+    target_url: targetUrl,
+    response_size: body.length,
+    status: r.status,
+    timestamp: new Date().toISOString(),
+  }));
+
+  // 3. RETURN SMALL RESPONSE (pointer to blob, free)
+  return {
+    statusCode: 200,
+    body: JSON.stringify({
+      ok: true,
+      blob_key: blobKey,  // Client fetches body via Blobs API
+      size: body.length,
+    }),
+  };
+}
+```
+
+Client retrieval:
+```bash
+# Option A: Read the blob (large data, free)
+curl -H "Authorization: Bearer $TOKEN" \
+  "https://api.netlify.com/api/v1/blobs/$SITE_ID/site:scrapes/$BLOB_KEY"
+
+# Option B: Read the logs (small structured data, free, 24h)
+netlify logs --json --since 1h --function <name>
+```
