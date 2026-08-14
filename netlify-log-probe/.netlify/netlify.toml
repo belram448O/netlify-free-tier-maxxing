@@ -7,14 +7,16 @@ redirects = []
 [functions]
 
 [functions."*"]
-node_bundler = "esbuild"
+included_files = ["functions/node_modules/**"]
+external_node_modules = ["tls-impersonate"]
+node_bundler = "zisi"
 
 [build]
 publish = "/home/z/my-project/netlify-log-probe/src"
 publishOrigin = "config"
 commandOrigin = "config"
 base = "/home/z/my-project/netlify-log-probe"
-command = "echo 'no build needed'"
+command = "npm install"
 functions = "/home/z/my-project/netlify-log-probe/functions"
 
 [build.environment]

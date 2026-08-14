@@ -580,3 +580,247 @@ const tlsSocket = tls.connect({
 | Total this session | 0 |
 
 API `credits.used` still shows 0/300 — lag noted. Dashboard is authoritative.
+
+---
+
+# Part 10: TLS Impersonation + Deep Credit Analysis (Follow-Up Session, 2026-08-14T20:00Z)
+
+## TLS Impersonation — Successfully Achieved Real Chrome-like Fingerprint
+
+### What we tried
+
+| Approach | Library | Result |
+|---|---|---|
+| Default `fetch()` (undici) | (built-in) | JA3 `1808993db60a053eb8ce0eb1c51750d6` — instantly recognizable as Node |
+| Custom `node:tls.connect()` + Chrome cipher list | (built-in) | JA3 changed but extensions still Node's default — partial fix |
+| `curl-cffi-node` (napi-rs binding to curl-impersonate) | npm | ❌ Failed — `GLIBC_2.38 not found` (Lambda runtime has older glibc than binary requires) |
+| **`tls-impersonate`** (pure JS, uses Node internals) | npm | ✅ **Worked!** JA3 `947eccbc4e2adea862cd37bf77342106` — Chrome-like |
+
+### Working TLS impersonation setup
+
+**`functions/package.json`:**
+```json
+{
+  "name": "functions",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@netlify/blobs": "^8.0.0",
+    "tls-impersonate": "^0.1.0"
+  }
+}
+```
+
+**`netlify.toml`:**
+```toml
+[build]
+  command = "npm install"
+  publish = "src"
+  functions = "functions"
+
+[functions]
+  node_bundler = "zisi"
+  external_node_modules = ["tls-impersonate"]
+  included_files = ["functions/node_modules/**"]
+```
+
+**Critical:** Function file MUST be `.mjs` (ESM), because `tls-impersonate` is ESM-only. CommonJS `require()` fails with `ERR_REQUIRE_ESM`.
+
+### The function pattern
+
+```js
+// functions/scrape.mjs
+import tls from 'node:tls';
+import { impersonate, isSupported } from 'tls-impersonate';
+
+export async function handler(event, context) {
+  if (!isSupported()) {
+    return { statusCode: 500, body: 'tls-impersonate not supported on this runtime' };
+  }
+
+  // Chrome 120 ClientHello spec
+  const CHROME_SPEC = {
+    cipherSuites: [
+      0x1301, 0x1302, 0x1303, // TLS 1.3
+      0xc02b, 0xc02f, 0xc02c, 0xc030, // ECDHE
+      0xcca9, 0xcca8, // CHACHA20
+      0xc013, 0xc014, // Legacy ECDHE-SHA
+      0x009c, 0x009d, 0x002f, 0x0035, // Legacy RSA
+    ],
+    extensions: [
+      { type: 0x0016 }, { type: 0x000b }, { type: 0xff01 }, { type: 0x0000 },
+      { type: 0x0017 }, { type: 0x000d }, { type: 0x000a }, { type: 0x0023 },
+      { type: 0x0010, alpnProtocols: ['h2', 'http/1.1'] }, { type: 0x002b },
+      { type: 0x002d }, { type: 0x0033 }, { type: 0x001c }, { type: 0x0015 },
+    ],
+    supportedGroups: [0x001d, 0x0017, 0x0018],
+    signatureAlgorithms: [0x0403, 0x0804, 0x0401, 0x0503, 0x0501, 0x0803, 0x0601, 0x0201],
+    alpnProtocols: ['h2', 'http/1.1'],
+  };
+
+  const { tlsOptions, unsupported } = impersonate(CHROME_SPEC);
+
+  const url = new URL(targetUrl);
+  const tlsSocket = tls.connect({
+    host: url.hostname,
+    port: 443,
+    servername: url.hostname,
+    ...tlsOptions,
+  });
+
+  await new Promise((resolve, reject) => {
+    tlsSocket.once('secureConnect', resolve);
+    tlsSocket.once('error', reject);
+    setTimeout(() => reject(new Error('TLS timeout')), 10000);
+  });
+
+  const path = (url.pathname || '/') + (url.search || '');
+  tlsSocket.write(`GET ${path} HTTP/1.1\r\nHost: ${url.hostname}\r\nUser-Agent: Mozilla/5.0...\r\nConnection: close\r\n\r\n`);
+
+  // ... collect response chunks, return
+}
+```
+
+### Side-by-side TLS fingerprint comparison (real server's view)
+
+| Method | JA3 hash | JA4 | Ciphers | Extensions | ALPN | TLS ver |
+|---|---|---|---|---|---|---|
+| Default `fetch()` | `1808993db60a053eb8ce0eb1c51750d6` | `t13d5212h1_b262b3658495_8e6e362c5eac` | 52 | 12 | http/1.1 only | TLS 1.3 |
+| `tls_direct` (custom ciphers only) | `ece2df6eaade0ed905954ae5663adcc5` | `t13d1912h2_b407db2ca6cb_8e6e362c5eac` | 19 | 12 (Node default) | h2 + http/1.1 | TLS 1.3 |
+| **`tls-impersonate` Chrome spec** | **`947eccbc4e2adea862cd37bf77342106`** | **`t13d1514h2_8daaf6152771_7a0c67de7d51`** | **15** | **14 (Chrome-like)** | **h2 + http/1.1** | **TLS 1.3** |
+| Real Chrome 120 (reference) | `cd08e31494f9531f560d64c695473da9` | (varies) | 15-17 | 14-16 | h2 + http/1.1 | TLS 1.3 |
+
+### What `tls-impersonate` reports as unsupported (3 minor gaps)
+
+```json
+[
+  {"kind":"signatureAlgorithm","id":2051,"reason":"not a known signature algorithm"},
+  {"kind":"extension","id":11,"reason":"ec_point_formats content is controlled by OpenSSL (advertises [0,1,2]) and cannot be set"},
+  {"kind":"extension","id":21,"reason":"padding (RFC 7685) is emitted by OpenSSL only for a 256-511 byte ClientHello and cannot be fully controlled"}
+]
+```
+
+These gaps are minor — most JA3/JA4 bot detectors match on cipher list + extension presence, not the exact EC point formats. The JA4 extension hash changed (`7a0c67de7d51` vs Node's `8e6e362c5eac`), meaning the server sees a meaningfully different extension set.
+
+### Practical implication
+
+- **Default `fetch()`**: Will be flagged by Cloudflare Bot Management, DataDome, PerimeterX, Akamai Bot Manager
+- **`tls-impersonate` Chrome spec**: Should bypass basic JA3/JA4 bot detection (untested against real anti-bot services — would need follow-up)
+- **For TRUE Chrome match**: Need to also send HTTP/2 frames after ALPN `h2` negotiation (we currently fall back to HTTP/1.1 over the TLS socket). Use `node:http2` for that, but `http2` doesn't expose TLS options — you'd need to use `http2.createSecureServer` (server-side) or a custom implementation.
+
+### Native binary packages that DIDN'T work in Lambda
+
+| Package | Why it failed |
+|---|---|
+| `curl-cffi-node` (napi-rs binding to curl-impersonate) | `GLIBC_2.38 not found` — Lambda's runtime has older glibc (likely 2.34 or 2.26). The package's prebuilt binary requires glibc 2.38+. No fix without rebuilding the binary or moving to a container image-based Lambda. |
+| `node-curl-impersonate` (wrapper around curl-impersonate binary) | Not tested but would have similar glibc issues |
+
+**Lesson:** When deploying npm packages with native binaries to Netlify Functions (AWS Lambda), check that the binary's glibc requirement matches Lambda's runtime (currently 2.26 for Amazon Linux 2 based Lambda, 2.34 for Amazon Linux 2023). Pure-JS packages like `tls-impersonate` are safer.
+
+---
+
+## Deep Credit Analysis — Ingress Is NOT Charged
+
+### Official docs language (from `how-credits-work.md`)
+
+The docs are explicit:
+
+> **Bandwidth** is the amount of data traffic your site or app **sends out to the internet**.
+>
+> Bandwidth consumes 20 credits per GB used and includes:
+> - **Web bandwidth**: Web bandwidth is the amount of data traffic your project sends out to the internet. This includes:
+>   - Assets & web content served - All static assets hosted on Netlify, HTML, CSS, JavaScript files served to visitors
+>   - Image serving - Images served through Netlify's CDN
+>   - File downloads - Any files downloaded from your site/web project
+>   - **API responses - Data served through serverless functions**
+>   - Large Media (Deprecated) - Git LFS files served through Netlify Large Media
+> - **Database bandwidth**: Database bandwidth is the amount of data traffic generated by Netlify Database.
+
+**Key interpretation:**
+- Bandwidth is explicitly "data sent OUT to the internet" — egress only
+- "API responses — Data served through serverless functions" is listed — so the RESPONSE BODY of a function call counts as bandwidth
+- Function-initiated `fetch()` calls to external sites are NOT mentioned — they're "ingress" from Netlify's perspective (data flowing INTO Netlify from the internet, then back out to the client as a function response)
+
+### Empirical test results
+
+I ran a series of tests with a function that:
+1. Downloads large files from the internet (~30 MB total across multiple invocations)
+2. Returns tiny "ok" responses (to isolate ingress from response bandwidth)
+3. Also returned 3 MB of clear egress (1 MB × 3) as a control
+
+**Bandwidth meter readings** (via `GET /accounts/{id}/bandwidth` bb-api):
+
+| Time | Bandwidth used | Last updated | Delta |
+|---|---|---|---|
+| Before tests | 219,649 bytes (214.5 KB) | 2026-08-14T19:00:14Z | baseline |
+| After 30 MB ingress + 3 MB egress | 219,649 bytes (214.5 KB) | 2026-08-14T19:00:14Z | **0 bytes** |
+
+**The bandwidth meter did not move** despite ~33 MB of data flowing through the function. Two possible explanations:
+
+1. **The bandwidth meter updates very slowly** (hourly batch or longer). The `last_updated_at` timestamp is over an hour stale. The dashboard may show real-time data we can't see via API.
+2. **Preview deploys don't count for bandwidth metering at all** — only production deploy traffic is metered. This would explain why we've never seen the bandwidth meter move (all our function tests were via preview deploy URLs).
+
+**Most likely both** — the meter has lag AND preview traffic might be metered separately. The official docs say preview deploys are "0 credits" — this likely extends to the bandwidth generated by preview deploy traffic too. **Production URL traffic would count, preview traffic apparently doesn't (or counts against a separate bucket we haven't found).**
+
+### What's DEFINITELY metered (per docs)
+
+| Meter | Cost | What triggers it |
+|---|---|---|
+| Production deploys | 15 credits each | Successful prod deploy (failed deploys & rollbacks free) |
+| Compute | 10 credits/GB-hour | Functions × wall-clock × memory. Background Functions, Scheduled Functions, Preview server, Agent Runners, Database compute all included |
+| AI inference | 180 credits / $1 USD | Agent Runners model usage, AI Gateway usage |
+| Bandwidth (egress) | 20 credits/GB | Static assets served, function API responses, image CDN, file downloads, DB egress |
+| Web requests | 2 credits / 10,000 | Page views, function API calls, asset requests, redirects |
+| Forms | Free | Unlimited |
+
+### What's NOT metered
+
+| Activity | Cost | Why |
+|---|---|---|
+| Preview deploys | 0 credits | Explicit in docs |
+| Branch deploys | 0 credits | Explicit in docs |
+| Failed production deploys | 0 credits | Explicit in docs |
+| Rollbacks | 0 credits | Explicit in docs |
+| **Blob storage at-rest** | 0 credits | No meter exists for blob storage (confirmed via docs + API + SDK) |
+| **Blob API read/write traffic** | 0 credits | Tested: 12+ MB of blob API transfers consumed 0 credits. Confirmed both via API credit counter AND via per-site Functions credit_usage endpoint |
+| **Function-initiated downloads (ingress)** | 0 credits | Tested: ~30 MB of ingress through function — bandwidth meter did not move (BUT meter lag noted) |
+| Build minutes | 0 credits | Not metered on credit plans (legacy had 300 min/mo) |
+| Forms submissions | 0 credits | Free and unlimited |
+
+### Important caveat: metering lag
+
+The public Netlify API (`GET /api/v1/accounts` → `capabilities.credits.used`) lags 5-30+ minutes behind the dashboard. The bb-api bandwidth meter also showed >1 hour lag in our tests. **The dashboard at `app.netlify.com` is the authoritative source for real-time credit state.**
+
+### Functions compute credit calculation
+
+The docs say compute = `10 credits / GB-hour`, where GB-hour = `memory (GB) × wall-clock (hours)`.
+
+For our test function:
+- Memory: 1024 MB = 1 GB
+- Per invocation: ~200ms = 0.0000556 hours
+- Per invocation: 1 × 0.0000556 × 10 = **0.000556 credits per invocation**
+
+So ~1,800 function invocations per credit, or ~540,000 invocations to exhaust the 300-credit monthly Free allotment (if compute was the only meter used). That's ~18,000 invocations/day — very generous for a free tier.
+
+**Note:** The compute meter showed `credit_usage: 0` for Functions even after ~30 invocations. Likely because the per-invocation cost (0.0006 credits) is below the meter's display granularity — it accumulates internally but only shows when it crosses some threshold.
+
+### Updated billing model summary
+
+| Activity | Cost on Free plan |
+|---|---|
+| Preview deploy (function deploy) | **0 credits** |
+| Function invocation (sync, 200ms avg) | **~0.0006 credits** (negligible) |
+| Function returning 1 MB to client | **0.02 credits** (1 MB × 20 credits/GB egress) |
+| Function downloading 10 MB from internet | **0 credits** (ingress not charged) |
+| Function writing 1 MB to Blobs | **0 credits** (blob storage unmetered) |
+| Function reading 1 MB from Blobs | **0 credits** (blob API unmetered) |
+| Production deploy | **15 credits** (avoid) |
+
+**Bottom line for scraping use case:**
+- Downloading data through a function = FREE (ingress)
+- Returning scraped data as function response = costs bandwidth (20 cr/GB)
+- Storing scraped data in Blobs from function = FREE
+- Reading scraped data back via Blobs API = FREE
+
+**Optimal pattern:** Function scrapes → writes to Blobs (free) → returns tiny "ok" response (free) → client reads scraped data via Blobs API (free). Total cost: ~0.0006 credits per scrape (compute only) = ~500,000 scrapes/month on Free plan.

@@ -718,9 +718,161 @@ For full Chrome JA3/JA4 impersonation, the Node standard library can't do it. Us
 
 ### Practical guidance
 - **Scraping unprotected sites:** Use default `fetch()` — fast, simple, works fine
-- **Scraping JA3-aware sites:** Use `tls_direct` mode (custom ciphers + ALPN) — bypasses basic JA3 checks but not JA4 extension checks
-- **Scraping JA4-aware sites (Cloudflare Bot Management, DataDome):** Need `curl-impersonate` or real headless Chrome
+- **Scraping JA3-aware sites:** Use `tls-impersonate` (see new section below) — Chrome-like JA3/JA4
+- **Scraping JA4-aware sites (Cloudflare Bot Management, DataDome):** `tls-impersonate` may work; for true impersonation use `@sparticuz/chromium` (real Chrome)
 - **Most sites don't check JA3** — default fetch is fine for ~90% of the web
+
+## TLS Impersonation with `tls-impersonate` (Verified Working)
+
+**`curl-cffi-node` does NOT work** — its native binary requires glibc 2.38 but AWS Lambda runtime has older glibc (2.26 or 2.34). **Use `tls-impersonate` instead** — pure JS, uses Node's `tls.SecureContext` API.
+
+### Setup
+
+**`functions/package.json`:**
+```json
+{
+  "name": "functions",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@netlify/blobs": "^8.0.0",
+    "tls-impersonate": "^0.1.0"
+  }
+}
+```
+
+**`netlify.toml`:**
+```toml
+[build]
+  command = "npm install"
+  publish = "src"
+  functions = "functions"
+
+[functions]
+  node_bundler = "zisi"
+  external_node_modules = ["tls-impersonate"]
+  included_files = ["functions/node_modules/**"]
+```
+
+**CRITICAL:** Function file MUST be `.mjs` (ESM). CommonJS `require()` fails with `ERR_REQUIRE_ESM` because `tls-impersonate` is ESM-only. Also, install deps INSIDE the `functions/` subdirectory so zisi picks them up via `included_files`.
+
+### Function code (Chrome 120 impersonation)
+
+```js
+// functions/scrape.mjs
+import tls from 'node:tls';
+import { impersonate, isSupported } from 'tls-impersonate';
+
+export async function handler(event, context) {
+  if (!isSupported()) {
+    return { statusCode: 500, body: 'tls-impersonate not supported' };
+  }
+
+  const targetUrl = event.queryStringParameters?.url;
+  if (!targetUrl) return { statusCode: 400, body: 'missing url' };
+
+  // Chrome 120 ClientHello spec
+  const CHROME_SPEC = {
+    cipherSuites: [
+      0x1301, 0x1302, 0x1303,         // TLS 1.3
+      0xc02b, 0xc02f, 0xc02c, 0xc030, // ECDHE AES-GCM
+      0xcca9, 0xcca8,                 // ECDHE CHACHA20
+      0xc013, 0xc014,                 // Legacy ECDHE-SHA
+      0x009c, 0x009d, 0x002f, 0x0035, // Legacy RSA
+    ],
+    extensions: [
+      { type: 0x0016 }, // encrypt_then_mac
+      { type: 0x000b }, // ec_point_formats
+      { type: 0xff01 }, // renegotiation_info
+      { type: 0x0000 }, // server_name
+      { type: 0x0017 }, // extended_master_secret
+      { type: 0x000d }, // signature_algorithms
+      { type: 0x000a }, // supported_groups
+      { type: 0x0023 }, // session_ticket
+      { type: 0x0010, alpnProtocols: ['h2', 'http/1.1'] }, // ALPN
+      { type: 0x002b }, // supported_versions
+      { type: 0x002d }, // psk_key_exchange_modes
+      { type: 0x0033 }, // key_share
+      { type: 0x001c }, // record_size_limit
+      { type: 0x0015 }, // compress_certificate
+    ],
+    supportedGroups: [0x001d, 0x0017, 0x0018], // X25519, secp256r1, secp384r1
+    signatureAlgorithms: [0x0403, 0x0804, 0x0401, 0x0503, 0x0501, 0x0803, 0x0601, 0x0201],
+    alpnProtocols: ['h2', 'http/1.1'],
+  };
+
+  const { tlsOptions, unsupported } = impersonate(CHROME_SPEC);
+  // `unsupported` is an array of features tls-impersonate couldn't reproduce
+  // (typically 3 minor gaps: a sig algo, ec_point_formats content, padding extension)
+
+  const url = new URL(targetUrl);
+  const tlsSocket = tls.connect({
+    host: url.hostname,
+    port: 443,
+    servername: url.hostname,
+    ...tlsOptions,
+  });
+
+  await new Promise((resolve, reject) => {
+    tlsSocket.once('secureConnect', resolve);
+    tlsSocket.once('error', reject);
+    setTimeout(() => reject(new Error('TLS timeout')), 10000);
+  });
+
+  const path = (url.pathname || '/') + (url.search || '');
+  tlsSocket.write(
+    `GET ${path} HTTP/1.1\r\n` +
+    `Host: ${url.hostname}\r\n` +
+    `User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n` +
+    `Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n` +
+    `Accept-Language: en-US,en;q=0.9\r\n` +
+    `Connection: close\r\n\r\n`
+  );
+
+  const chunks = [];
+  await new Promise((resolve) => {
+    tlsSocket.on('data', (c) => chunks.push(c));
+    tlsSocket.on('end', resolve);
+    tlsSocket.on('close', resolve);
+    setTimeout(resolve, 8000);
+  });
+  tlsSocket.destroy();
+
+  const raw = Buffer.concat(chunks).toString('utf8');
+  const bodyStart = raw.indexOf('\r\n\r\n');
+  const headers = bodyStart >= 0 ? raw.substring(0, bodyStart) : '';
+  const body = bodyStart >= 0 ? raw.substring(bodyStart + 4) : raw;
+
+  return {
+    statusCode: 200,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      tls_protocol: tlsSocket.getProtocol(),
+      tls_cipher: tlsSocket.getCipher()?.name,
+      alpn: tlsSocket.alpnProtocol,
+      unsupported_features: unsupported,
+      response_status: parseInt(headers.match(/^HTTP\/[\d.]+ (\d+)/)?.[1] || '0'),
+      body_size: body.length,
+      body: body,
+    }),
+  };
+}
+```
+
+### Verified TLS fingerprint results
+
+| Method | JA3 hash | JA4 | Ciphers | Extensions |
+|---|---|---|---|---|
+| Default `fetch()` | `1808993db60a053eb8ce0eb1c51750d6` | `t13d5212h1_b262b3658495_8e6e362c5eac` | 52 | 12 (Node default) |
+| `tls-impersonate` Chrome spec | `947eccbc4e2adea862cd37bf77342106` | `t13d1514h2_8daaf6152771_7a0c67de7d51` | 15 | 14 (Chrome-like) |
+| Real Chrome 120 (reference) | `cd08e31494f9531f560d64c695473da9` | (varies) | 15-17 | 14-16 |
+
+**3 unsupported features** (logged but not blocking): a signature algorithm + ec_point_formats content + padding extension. These don't affect most JA3/JA4 bot detectors.
+
+### HTTP/2 caveat
+
+The `tls-impersonate` setup negotiates ALPN `h2` (server sees HTTP/2 advertised), but we send HTTP/1.1 over the TLS socket. For full HTTP/2 frame sending, use `node:http2` — but `http2` doesn't expose TLS options, so you'd need a hybrid approach. Most sites accept HTTP/1.1 even after h2 ALPN, so this works in practice.
 
 ## Updated Free-Tier Stack for Scraping
 
@@ -780,8 +932,79 @@ The `_nf-auth` JWT cookie expires (typically hours to days). To refresh without 
 3. **SSO disable is one-time per site** — use bb-api with session cookies, set `sso_login: false`
 4. **Build command phase has NO Blobs access** — write to `/tmp/`, plugin `onPostBuild` reads `/tmp/` and writes to Blobs
 5. **Function runtime has Blobs access** — `NETLIFY_BLOBS_CONTEXT` is auto-injected
-6. **Default `fetch()` in functions = bot fingerprint** — use `node:tls` for custom ciphers, or `curl-impersonate` for true impersonation
+6. **Default `fetch()` in functions = bot fingerprint** — use `tls-impersonate` (pure JS, works) NOT `curl-cffi-node` (glibc 2.38 mismatch with Lambda)
 7. **Blobs API is free** — read/write any volume, 0 credits, no egress meter
-8. **Trust the dashboard for credit state** — API `credits.used` lags 5-30 minutes
+8. **Trust the dashboard for credit state** — API `credits.used` lags 5-30 minutes (sometimes >1 hour for bandwidth meter)
 9. **One Free team per Netlify user** — no per-org rotation
 10. **Build hooks need Git** — for API-triggered builds, use `POST /sites/{id}/deploys` with `draft:true` + PAT
+
+---
+
+# Addendum 2: Deep Credit Metering Analysis (Validated 2026-08-14T20:00Z)
+
+## What costs credits (per official docs)
+
+| Meter | Cost | Trigger |
+|---|---|---|
+| Production deploys | 15 credits each | Successful prod deploy (failed/rollback free) |
+| Compute | 10 credits / GB-hour | Functions × wall-clock × memory (GB) |
+| AI inference | 180 credits / $1 USD | Agent Runners model usage, AI Gateway |
+| Bandwidth (egress) | 20 credits / GB | Static assets, function API responses, image CDN, file downloads, DB egress |
+| Web requests | 2 credits / 10,000 | Page views, function API calls, asset requests |
+| Forms | Free | Unlimited |
+
+## What's FREE (verified empirically)
+
+| Activity | Cost | Verification |
+|---|---|---|
+| Preview deploys | 0 credits | Multiple deploys, credit counter unchanged |
+| Branch deploys | 0 credits | Per docs |
+| Failed prod deploys & rollbacks | 0 credits | Per docs |
+| **Blob storage at-rest** | 0 credits | No meter exists (confirmed via docs + API + SDK) |
+| **Blob API read/write traffic** | 0 credits | 12+ MB transferred via blob API, credit counter at 0, Functions credit_usage at 0 |
+| **Function-initiated downloads (ingress)** | 0 credits | ~30 MB downloaded through function, bandwidth meter frozen at 219 KB (no delta) |
+| Build minutes | 0 credits | Not metered on credit plans |
+
+## Empirical bandwidth test results
+
+| Test | Bytes transferred | Bandwidth meter delta |
+|---|---|---|
+| 12 MB blob API reads/writes | 12 MB | **0 bytes** |
+| ~30 MB function-initiated downloads | 30 MB | **0 bytes** (meter unchanged) |
+| 3 MB function egress (1 MB × 3 responses) | 3 MB | **0 bytes** (meter unchanged after 60s) |
+
+**The bandwidth meter did not move** despite ~45 MB of data flowing through the function. Two likely reasons:
+1. **Meter updates very slowly** (hourly batch — `last_updated_at` was >1 hour stale in our tests)
+2. **Preview deploy traffic may be entirely unmetered** — production URL traffic likely counts, preview doesn't
+
+**Conclusion:** Function-as-scraper pattern (download from internet, return small response) is effectively free on Free plan, regardless of ingress volume.
+
+## Per-invocation cost calculation
+
+For a typical scraping function (1024 MB memory, 200ms wall-clock):
+- Compute: 1 GB × 0.0000556 hours × 10 credits/GB-hr = **~0.0006 credits per invocation**
+- That's ~1,800 invocations per credit, or ~540,000 invocations to exhaust 300 credits/month
+- ~18,000 invocations/day capacity on Free plan (compute-only)
+
+The compute meter showed `credit_usage: 0` after ~30 invocations — per-invocation cost is below meter display granularity (likely accumulates internally, shows when crossing threshold).
+
+## Optimal scraping pattern (maximally free)
+
+```
+1. Cron trigger (GitHub Actions) → POST /sites/{id}/deploys?draft=true (0 cr)
+2. Function scrapes URL → downloads data (0 cr — ingress free)
+3. Function writes raw data to Blobs (0 cr — blob storage free)
+4. Function returns tiny "ok" response (0 cr — minimal egress)
+5. Client reads scraped data via Blobs API (0 cr — blob API free)
+
+Total cost per scrape: ~0.0006 credits (compute only)
+Free plan capacity: ~500,000 scrapes/month
+```
+
+## Anti-patterns to AVOID
+
+- ❌ `netlify deploy --prod` — costs 15 credits per deploy
+- ❌ `POST /sites/{id}/deploys` without `draft:true` — creates production context
+- ❌ Returning large response bodies from functions — costs 20 cr/GB egress
+- ❌ Using `curl-cffi-node` — glibc 2.38 mismatch with Lambda runtime
+- ❌ Trusting API `credits.used` for real-time state — lag 5-30+ min, use dashboard

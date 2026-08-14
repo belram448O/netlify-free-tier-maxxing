@@ -1,7 +1,11 @@
 [build]
-  command = "echo 'no build needed'"
+  command = "npm install"
   publish = "src"
   functions = "functions"
 
 [functions]
-  node_bundler = "esbuild"
+  # .mjs files are ESM — zisi handles them natively
+  # No bundler needed
+  node_bundler = "zisi"
+  external_node_modules = ["tls-impersonate"]
+  included_files = ["functions/node_modules/**"]
