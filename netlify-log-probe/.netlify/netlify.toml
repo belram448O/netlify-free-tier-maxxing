@@ -1,4 +1,3 @@
-plugins = []
 headers = []
 redirects = []
 
@@ -6,12 +5,18 @@ redirects = []
 
 [functions."*"]
 
+[[plugins]]
+origin = "config"
+package = "./plugins/store-data"
+
+[plugins.inputs]
+
 [build]
 publish = "/home/z/my-project/netlify-log-probe/src"
 publishOrigin = "config"
 commandOrigin = "config"
 base = "/home/z/my-project/netlify-log-probe"
-command = "node src/build-probe.js"
+command = "node src/scrape.js"
 
 [build.environment]
 

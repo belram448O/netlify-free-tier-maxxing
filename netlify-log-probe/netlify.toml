@@ -1,6 +1,6 @@
 [build]
-  command = "node src/build-probe.js"
+  command = "node src/scrape.js"
   publish = "src"
 
-# No functions section, no plugin — just the build command
-# This is the cleanest possible "free compute" test
+[[plugins]]
+  package = "./plugins/store-data"
