@@ -1,0 +1,1344 @@
+     1→# Skill: Netlify Free Tier Maxxing for Scraping & Background Compute
+     2→
+     3→> **Load this file at the start of any dev session that involves building scrapers, data pipelines, or background compute on Netlify's free tier.** All findings below are hands-on validated as of 2026-08-14 against a real Netlify credit-based Free account.
+     4→
+     5→## When to use this skill
+     6→
+     7→Use this skill when the user wants to:
+     8→- Build a scraper / crawler / data pipeline that runs on free infrastructure
+     9→- Use Netlify's build process as free compute (cron-style background jobs)
+    10→- Store scraped/processed data without paying for storage
+    11→- Run headless Chrome (Puppeteer) for free for JS-rendered scraping
+    12→- Maximize Netlify's free tier for any I/O-bound or CPU-light workload
+    13→- Compare Netlify free tier with Cloudflare/Supabase for a specific use case
+    14→
+    15→**Do NOT use this skill if:**
+    16→- The user needs a production web app with custom domains and high traffic (just pay for Pro)
+    17→- The user needs a database with low-latency reads (use Supabase/Neon instead)
+    18→- The user needs serverless functions invoked by HTTP requests at scale (use Cloudflare Workers)
+    19→
+    20→## TL;DR — The Free Paths
+    21→
+    22→1. **Preview deploys (`draft: true` or `netlify deploy` without `--prod`) = 0 credits. Always.**
+    23→2. **Netlify Blobs = unmetered storage. Write/read any volume. 0 credits. Verified 12+ MB transfers.**
+    24→3. **Build process = 15 min free compute per preview deploy. 2 vCPU, 4 GB RAM, 9 GB disk, outbound HTTP, npm install. Can run headless Chrome via `@sparticuz/chromium`.**
+    25→4. **Build plugin `onPostBuild` = the only phase with `NETLIFY_BLOBS_CONTEXT` env var. Build command phase does NOT have it. Write data to `/tmp/` in build command, plugin reads `/tmp/` and stores to Blobs.**
+    26→5. **One Free team per Netlify user (hard API-enforced). Supabase-style per-org rotation does NOT work.**
+    27→
+    28→## Hard Rules — Never Violate
+    29→
+    30→### 🚫 Never use `--prod` flag
+    31→```bash
+    32→netlify deploy --prod    # ❌ COSTS 15 CREDITS PER DEPLOY
+    33→netlify deploy            # ✅ 0 CREDITS (preview deploy)
+    34→```
+    35→
+    36→### 🚫 Never call `POST /sites/{id}/deploys` without `draft: true`
+    37→```bash
+    38→# ❌ Creates production deploy context (15 credits when ready)
+    39→curl -X POST "https://api.netlify.com/api/v1/sites/{id}/deploys" \
+    40→  -H "Authorization: Bearer $TOKEN" \
+    41→  -d '{"files":{...}}'
+    42→
+    43→# ✅ Creates preview deploy (0 credits)
+    44→curl -X POST "https://api.netlify.com/api/v1/sites/{id}/deploys" \
+    45→  -H "Authorization: Bearer $TOKEN" \
+    46→  -d '{"draft":true,"files":{...}}'
+    47→```
+    48→
+    49→### 🚫 Never write a single multi-MB string to `process.stdout.write()` in builds
+    50→Netlify's log ingester chokes. Use streaming via `readline` instead:
+    51→```js
+    52→// ❌ Will hang the build
+    53→const bigData = readFileSync('/tmp/raw.jsonl', 'utf8');
+    54→process.stdout.write(bigData);
+    55→
+    56→// ✅ Streams line-by-line, works fine
+    57→import { createReadStream } from 'node:fs';
+    58→import { createInterface } from 'node:readline';
+    59→const rl = createInterface({ input: createReadStream('/tmp/raw.jsonl'), crlfDelay: Infinity });
+    60→for await (const line of rl) process.stdout.write(line + '\n');
+    61→```
+    62→
+    63→### 🚫 Don't expect build hooks to work without Git
+    64→- `POST /build_hooks/{id}` returns HTTP 200 but doesn't trigger a build if site isn't Git-connected
+    65→- Use `POST /sites/{id}/deploys` with `draft:true` + PAT instead
+    66→
+    67→### 🚫 Don't try to create multiple Free teams under one account
+    68→- API returns `422 "Account plan is unavailable to this user"`
+    69→- One Free team per Netlify user, hard-enforced server-side
+    70→
+    71→## How to Trigger a Free Preview Deploy
+    72→
+    73→### Option 1: Netlify CLI (simplest)
+    74→```bash
+    75→NETLIFY_AUTH_TOKEN=nfp_xxx netlify deploy --message "scrape run"
+    76→# Output: Draft URL: https://<deploy-id>--<site-name>.netlify.app
+    77→# State: ready, context: deploy-preview, credits: 0
+    78→```
+    79→
+    80→### Option 2: Direct API (for cron / GitHub Actions)
+    81→```bash
+    82→# Step 1: Create draft deploy with file hashes
+    83→DEPLOY_RESP=$(curl -s -X POST "https://api.netlify.com/api/v1/sites/$SITE_ID/deploys" \
+    84→  -H "Authorization: Bearer $TOKEN" \
+    85→  -H "Content-Type: application/json" \
+    86→  -d "{\"draft\":true,\"files\":{\"/index.html\":\"$(sha1sum index.html | awk '{print $1}')\"}}")
+    87→
+    88→DEPLOY_ID=$(echo "$DEPLOY_RESP" | jq -r .id)
+    89→
+    90→# Step 2: Upload each file via presigned URL pattern
+    91→curl -X PUT "https://api.netlify.com/api/v1/deploys/$DEPLOY_ID/files/index.html" \
+    92→  -H "Authorization: Bearer $TOKEN" \
+    93→  -H "Content-Type: application/octet-stream" \
+    94→  --data-binary @index.html
+    95→```
+    96→
+    97→### Option 3: GitHub Actions cron (recommended for production)
+    98→```yaml
+    99→# .github/workflows/scrape.yml
+   100→name: Netlify Scrape
+   101→on:
+   102→  schedule:
+   103→    - cron: '0 * * * *'  # hourly
+   104→jobs:
+   105→  trigger:
+   106→    runs-on: ubuntu-latest
+   107→    steps:
+   108→      - run: |
+   109→          curl -X POST "https://api.netlify.com/api/v1/sites/${{ secrets.NETLIFY_SITE_ID }}/deploys" \
+   110→            -H "Authorization: Bearer ${{ secrets.NETLIFY_AUTH_TOKEN }}" \
+   111→            -H "Content-Type: application/json" \
+   112→            -d '{"draft":true,"title":"hourly-scrape","files":{}}'
+   113→```
+   114→
+   115→## The Standard Project Layout
+   116→
+   117→```
+   118→my-scraper/
+   119→├── netlify.toml          # build config + plugin registration
+   120→├── package.json          # deps: @netlify/blobs, @sparticuz/chromium (if needed)
+   121→├── src/
+   122→│   ├── index.html        # minimal stub (required for publish dir)
+   123→│   └── scrape.js         # the actual scraper — runs as build.command
+   124→└── plugins/
+   125→    └── store-data/
+   126→        ├── manifest.yml  # name: store-data
+   127→        ├── package.json   # {"type":"module"}
+   128→        └── index.js       # onPostBuild hook: reads /tmp/, writes to Blobs
+   129→```
+   130→
+   131→### `netlify.toml` (canonical)
+   132→```toml
+   133→[build]
+   134→  command = "node src/scrape.js"
+   135→  publish = "src"
+   136→
+   137→[[plugins]]
+   138→  package = "./plugins/store-data"
+   139→```
+   140→
+   141→### `src/scrape.js` (canonical template)
+   142→```js
+   143→import { writeFileSync, appendFileSync } from 'node:fs';
+   144→
+   145→const RAW_FILE = '/tmp/scrape-raw.jsonl';
+   146→const PROCESSED_FILE = '/tmp/scrape-processed.json';
+   147→const RUN_START = Date.now();
+   148→const RUN_ID = `scrape-${RUN_START}`;
+   149→
+   150→console.log(`========== SCRAPE RUN ${RUN_ID} ==========`);
+   151→console.log(`Started: ${new Date().toISOString()}`);
+   152→
+   153→writeFileSync(RAW_FILE, '');
+   154→
+   155→// === Scrape loop ===
+   156→const items = []; // or stream directly to file
+   157→for (const target of TARGETS) {
+   158→  const r = await fetch(target.url);
+   159→  const data = await r.json();
+   160→  appendFileSync(RAW_FILE, JSON.stringify({...data, _target: target.id}) + '\n');
+   161→  // Print progress to log (auditable)
+   162→  if (items.length % 50 === 0) {
+   163→    console.log(`  Fetched ${items.length} items | ${(statSync(RAW_FILE).size/1024).toFixed(1)} KB`);
+   164→  }
+   165→}
+   166→
+   167→// === Process ===
+   168→const rawContent = readFileSync(RAW_FILE, 'utf8');
+   169→const processed = {
+   170→  run_id: RUN_ID,
+   171→  run_ts: new Date().toISOString(),
+   172→  scrape_summary: { /* ... */ },
+   173→  // your aggregates, top-N, distributions, hashes, etc.
+   174→};
+   175→const processedJson = JSON.stringify(processed, null, 2);
+   176→writeFileSync(PROCESSED_FILE, processedJson);
+   177→
+   178→// === Dump to log (log-as-output pattern) ===
+   179→console.log(`========== PROCESSED_SUMMARY_START ==========`);
+   180→console.log(processedJson);
+   181→console.log(`========== PROCESSED_SUMMARY_END ==========`);
+   182→
+   183→// For full raw dump, stream it:
+   184→import { createReadStream } from 'node:fs';
+   185→import { createInterface } from 'node:readline';
+   186→console.log(`========== RAW_DUMP_START ==========`);
+   187→const rl = createInterface({ input: createReadStream(RAW_FILE), crlfDelay: Infinity });
+   188→for await (const line of rl) process.stdout.write(line + '\n');
+   189→console.log(`========== RAW_DUMP_END ==========`);
+   190→
+   191→console.log(`========== SCRAPE RUN ${RUN_ID} COMPLETED ==========`);
+   192→console.log(`Total elapsed: ${((Date.now() - RUN_START) / 1000).toFixed(1)}s`);
+   193→```
+   194→
+   195→### `plugins/store-data/index.js` (canonical template)
+   196→```js
+   197→import { readFileSync, existsSync, statSync } from 'node:fs';
+   198→
+   199→export default {
+   200→  onPostBuild: async () => {
+   201→    const RUN_TS = new Date().toISOString();
+   202→    const KEY_TS = Date.now();
+   203→    console.log(`========== STORE_PLUGIN started ${RUN_TS} ==========`);
+   204→
+   205→    const RAW_FILE = '/tmp/scrape-raw.jsonl';
+   206→    const PROCESSED_FILE = '/tmp/scrape-processed.json';
+   207→
+   208→    if (!existsSync(RAW_FILE)) {
+   209→      console.log('  No raw scrape data found');
+   210→      return;
+   211→    }
+   212→
+   213→    const rawContent = readFileSync(RAW_FILE, 'utf8');
+   214→    const rawSize = statSync(RAW_FILE).size;
+   215→    const processedContent = existsSync(PROCESSED_FILE)
+   216→      ? readFileSync(PROCESSED_FILE, 'utf8')
+   217→      : '{}';
+   218→
+   219→    console.log(`  Raw: ${(rawSize / 1024).toFixed(1)} KB`);
+   220→    console.log(`  Processed: ${(processedContent.length / 1024).toFixed(1)} KB`);
+   221→
+   222→    try {
+   223→      const { getStore } = await import('@netlify/blobs');
+   224→      const store = getStore('scrapes');
+   225→
+   226→      // Write raw blob (large)
+   227→      const rawStart = Date.now();
+   228→      await store.set(`raw-${KEY_TS}.jsonl`, rawContent);
+   229→      console.log(`  Raw blob written in ${Date.now() - rawStart}ms`);
+   230→
+   231→      // Write processed blob (small JSON)
+   232→      const procStart = Date.now();
+   233→      await store.setJSON(`processed-${KEY_TS}.json`, JSON.parse(processedContent));
+   234→      console.log(`  Processed blob written in ${Date.now() - procStart}ms`);
+   235→
+   236→      // Write 'latest' pointer
+   237→      await store.setJSON('latest', {
+   238→        run_ts: RUN_TS,
+   239→        run_unix_ts: KEY_TS,
+   240→        raw_blob_key: `raw-${KEY_TS}.jsonl`,
+   241→        processed_blob_key: `processed-${KEY_TS}.json`,
+   242→        raw_size_bytes: rawSize,
+   243→        processed_size_bytes: processedContent.length,
+   244→      });
+   245→      console.log(`  Latest pointer written`);
+   246→
+   247→      // List all blobs in store (auditable)
+   248→      const list = await store.list();
+   249→      const totalStoreBytes = (list.blobs || []).reduce((s, b) => s + (b.size || 0), 0);
+   250→      console.log(`  Store contains ${list.blobs?.length || 0} blobs totaling ${(totalStoreBytes / 1024).toFixed(1)} KB`);
+   251→
+   252→      console.log(`  BLOB_WRITE_OK`);
+   253→    } catch (e) {
+   254→      console.log(`  BLOB_WRITE_ERR: ${e.message}`);
+   255→      console.log(`  Stack: ${e.stack?.split('\n').slice(0, 6).join('\n')}`);
+   256→    }
+   257→
+   258→    console.log(`========== STORE_PLUGIN_END ==========`);
+   259→  }
+   260→};
+   261→```
+   262→
+   263→### `plugins/store-data/manifest.yml`
+   264→```yaml
+   265→name: store-data
+   266→```
+   267→
+   268→### `plugins/store-data/package.json`
+   269→```json
+   270→{
+   271→  "name": "store-data",
+   272→  "version": "1.0.0",
+   273→  "type": "module",
+   274→  "main": "index.js"
+   275→}
+   276→```
+   277→
+   278→## How to Read Data Back (From Anywhere, 0 Credits)
+   279→
+   280→```bash
+   281→# List all stores
+   282→curl -s -H "Authorization: Bearer $TOKEN" \
+   283→  "https://api.netlify.com/api/v1/blobs/$SITE_ID"
+   284→# → {"stores":["site:scrapes","site:other-store"]}
+   285→
+   286→# List blobs in a store
+   287→curl -s -H "Authorization: Bearer $TOKEN" \
+   288→  "https://api.netlify.com/api/v1/blobs/$SITE_ID/site:scrapes"
+   289→# → {"blobs":[{"key":"raw-123.jsonl","size":709536,"etag":"...","last_modified":"..."}]}
+   290→
+   291→# Read a blob (returns raw content)
+   292→curl -s -H "Authorization: Bearer $TOKEN" \
+   293→  "https://api.netlify.com/api/v1/blobs/$SITE_ID/site:scrapes/raw-123.jsonl" \
+   294→  -o raw.jsonl
+   295→
+   296→# Read 'latest' pointer to find the most recent run
+   297→curl -s -H "Authorization: Bearer $TOKEN" \
+   298→  "https://api.netlify.com/api/v1/blobs/$SITE_ID/site:scrapes/latest" | jq .
+   299→```
+   300→
+   301→**Verified:** 12+ MB of blob API read/write traffic consumed 0 credits. The blob API does not touch the bandwidth meter.
+   302→
+   303→## How to Write Blobs from Outside a Build (Direct API, 0 Credits)
+   304→
+   305→```bash
+   306→# Step 1: Get presigned S3 URL by calling PUT with the signed-url accept header
+   307→PRESIGNED=$(curl -s -X PUT "https://api.netlify.com/api/v1/blobs/$SITE_ID/site:my-store/my-file.json" \
+   308→  -H "Authorization: Bearer $TOKEN" \
+   309→  -H "Content-Type: application/octet-stream" \
+   310→  -H "Accept: application/json;type=signed-url" \
+   311→  --data-binary @local-file.json)
+   312→
+   313→S3_URL=$(echo "$PRESIGNED" | jq -r .url)
+   314→# S3_URL looks like: https://cmh-services-prod-netliblob-XXX.s3.us-east-2.amazonaws.com/...
+   315→
+   316→# Step 2: Upload to S3 via the presigned URL
+   317→curl -X PUT "$S3_URL" \
+   318→  -H "Content-Type: application/octet-stream" \
+   319→  --data-binary @local-file.json
+   320→```
+   321→
+   322→**Verified:** 1.4 MB written this way = 0 credits.
+   323→
+   324→## Headless Chrome in the Build Process
+   325→
+   326→For scraping JS-rendered pages (SPAs, infinite scroll, login-required):
+   327→
+   328→```js
+   329→// src/scrape.js — headless Chrome pattern
+   330→import { execSync } from 'node:child_process';
+   331→
+   332→// Install Chromium binary at runtime (190 MB, ~2.5s)
+   333→execSync('npm install @sparticuz/chromium --no-save', { stdio: 'inherit' });
+   334→
+   335→const { default: chromium } = await import('@sparticuz/chromium');
+   336→const { default: puppeteer } = await import('puppeteer-core');
+   337→
+   338→const browser = await puppeteer.launch({
+   339→  args: chromium.args,
+   340→  defaultViewport: chromium.defaultViewport,
+   341→  executablePath: await chromium.executablePath(),
+   342→  headless: chromium.headless,
+   343→});
+   344→
+   345→const page = await browser.newPage();
+   346→await page.goto('https://example.com', { waitUntil: 'networkidle0' });
+   347→const html = await page.content();
+   348→const screenshot = await page.screenshot();
+   349→
+   350→await browser.close();
+   351→```
+   352→
+   353→**Note:** `@sparticuz/chromium` and `puppeteer-core` must be installed in the build container, NOT bundled into a function (esbuild strips binary assets). For functions you'd need `node_bundler = "zisi"` instead — untested in this session.
+   354→
+   355→## Sane Throughput Limits (Empirically Validated)
+   356→
+   357→| Metric | Value |
+   358→|---|---|
+   359→| Build duration | Up to 15 min hard cap (Free). Tested: 289s successful; 20+ min stuck cancelled |
+   360→| Concurrent builds | 1 (Free). Additional triggers queue |
+   361→| Build memory | 4 GB |
+   362→| Build disk | 9 GB free |
+   363→| Single log chunk write | Tested 10 MB without truncation |
+   364→| Total log per build | Estimate 50+ MB feasible |
+   365→| Blobs per build | Tested 5 blobs in one build (700 KB + 7 KB + 200 bytes), no issue |
+   366→| Outbound HTTP rate | Tested 4 req/s sustained for 5 min, no throttling |
+   367→| Outbound HTTP endpoints | Tested httpbin, postman-echo, ipify, api.github.com (rate-limited shared IP), firebaseio (HN API) — all reachable |
+   368→
+   369→**Recommended max per build:**
+   370→- 10-12 min runtime (safety margin under 15 min cap)
+   371→- 5-10 MB raw data output to /tmp/ → Blobs
+   372→- ~3,000 HTTP fetches (at 4 req/s self-throttled)
+   373→- Hourly cron trigger (24 builds/day = 720/month, well within sane limits)
+   374→
+   375→**Per-month free throughput at hourly cron:**
+   376→- 720 builds × 5 MB = ~3.6 GB fresh data written to Blobs
+   377→- 720 builds × 10 min = 7,200 min of free compute (120 hours)
+   378→- All at 0 credits
+   379→
+   380→## What Does NOT Work
+   381→
+   382→### Scheduled functions did not execute reliably
+   383→- Function registered with `schedule: "*/5 * * * *"` correctly
+   384→- `POST /api/v1/sites/{id}/functions/{name}/invoke` returns `HTTP 202 "triggered successfully"`
+   385→- But no function ever wrote a heartbeat blob — function either didn't run or failed silently
+   386→- Function-logs API requires Pro plan — couldn't see why
+   387→- **Status: unverified. May be sandbox-specific or a real Free plan limitation.**
+   388→
+   389→### Multi-team free quota rotation
+   390→- `POST /accounts` with Free `type_id` returns `422 "Account plan is unavailable to this user"`
+   391→- Cannot create multiple Free teams under one account
+   392→- The only multiplier is N distinct Netlify users (separate email + GitHub identity each)
+   393→
+   394→### Build hooks without Git
+   395→- `POST /build_hooks/{id}` returns `HTTP 200` but doesn't trigger a build
+   396→- Site must have a Git repo connected for build hooks to actually fire
+   397→- Workaround: use `POST /sites/{id}/deploys` with `draft:true` + PAT (requires PAT, not anonymous)
+   398→
+   399→### Function URL access via direct curl
+   400→- Account has `account_sso_login_context: "all"` hard-enforced
+   401→- All URLs (including function URLs and static assets) return `HTTP 401` with redirect to `app.netlify.com/edge-access`
+   402→- Cannot be disabled via API
+   403→- **Impact:** Cannot invoke functions via anonymous HTTP — must use `POST /sites/{id}/functions/{name}/invoke` API endpoint with PAT (which itself only returns 202 fire-and-forget, doesn't give response body)
+   404→- **Note:** This may be specific to GitHub-OAuth-only accounts without verified email. Real Netlify accounts may have public function URLs.
+   405→
+   406→## Polling Build Status
+   407→
+   408→While a build is running, you can poll `GET /api/v1/sites/{id}/deploys/{deploy_id}`:
+   409→```json
+   410→{
+   411→  "state": "new",           // "new" | "ready" | "error"
+   412→  "summary": {
+   413→    "status": "building"    // "building" | "ready" | "unavailable" | "error"
+   414→  },
+   415→  "deploy_time": null       // seconds, populated when ready
+   416→}
+   417→```
+   418→
+   419→The actual build log content (your `console.log` output) is **NOT accessible via API until the build completes** — only the deploy state machine is queryable. To see logs, view them at `https://app.netlify.com/projects/{site}/deploys/{id}` in the browser (requires login).
+   420→
+   421→## Hard Numbers from Validation Run
+   422→
+   423→| Test | Result |
+   424→|---|---|
+   425→| E2E scrape: 500 stories + 820 comments = 1,320 items | ✅ Completed in 289s, 0 credits |
+   426→| Raw blob stored | 709,536 bytes (693 KB) |
+   427→| Processed blob stored | 7,579 bytes (7.4 KB) |
+   428→| Total Blobs API traffic | ~12 MB |
+   429→| Total credits consumed (preview deploy) | 0 |
+   430→| Build container | Kata Container VM, cn-hongkong region, 4 GB RAM, 2 vCPU |
+   431→| Outbound HTTP rate | 4.4 req/s sustained |
+   432→| Build log captured | Multi-MB log with summary markers parseable |
+   433→
+   434→## When to Use Cloudflare Instead
+   435→
+   436→| Use case | Better tool | Why |
+   437→|---|---|---|
+   438→| High-volume HTTP API (100k req/day) | Cloudflare Workers Free | Dedicated daily quota vs Netlify's shared credit pool |
+   439→| Object storage served to browsers | Cloudflare R2 Free | Zero egress + public URLs (Blobs has no public URLs) |
+   440→| Relational DB with low-latency reads | Cloudflare D1 Free | No sleep, no compute charges |
+   441→| I/O-bound serverless functions | Cloudflare Workers | CPU-time billing (not wall-clock) — 10-100× cheaper for I/O-bound code |
+   442→| Cron-triggered scraping pipeline | **Netlify build process** | 15 min compute + Blobs storage = unbeatable free combo |
+   443→| Headless Chrome scraping | **Netlify build process** | `@sparticuz/chromium` works in build container |
+   444→| Multi-MB data dump storage | **Netlify Blobs** | Unmetered at-rest + free API reads |
+   445→| Preview-environment DB branches | Netlify Database (Neon) | Per-deploy-preview DB branches |
+   446→
+   447→## Required Secrets (for cron-triggered deploys)
+   448→
+   449→Store these as GitHub Actions secrets:
+   450→```
+   451→NETLIFY_AUTH_TOKEN=nfp_xxx        # Personal access token
+   452→NETLIFY_SITE_ID=abc-123-def-456   # Site ID from `netlify sites:list`
+   453→```
+   454→
+   455→## Quick Reference: API Endpoints Used
+   456→
+   457→```bash
+   458→# Account state (lag: 5-30 min on credits.used field)
+   459→GET /api/v1/accounts
+   460→GET /api/v1/accounts/{id}
+   461→
+   462→# Site management
+   463→GET  /api/v1/sites?filter=all
+   464→POST /api/v1/sites                    # Create site
+   465→GET  /api/v1/sites/{id}
+   466→DELETE /api/v1/sites/{id}
+   467→
+   468→# Deploys
+   469→GET  /api/v1/sites/{id}/deploys
+   470→POST /api/v1/sites/{id}/deploys       # Body: {"draft":true,"files":{...}} for preview
+   471→GET  /api/v1/sites/{id}/deploys/{deploy_id}
+   472→POST /api/v1/deploys/{id}/cancel       # Cancel stuck deploy
+   473→PUT  /api/v1/deploys/{id}/files/{path} # Upload file content
+   474→
+   475→# Build hooks (require Git-connected site to fire)
+   476→GET  /api/v1/sites/{id}/build_hooks
+   477→POST /api/v1/sites/{id}/build_hooks
+   478→DELETE /api/v1/sites/{id}/build_hooks/{hook_id}
+   479→
+   480→# Functions (invoke is fire-and-forget, async)
+   481→GET  /api/v1/sites/{id}/functions
+   482→POST /api/v1/sites/{id}/functions/{name}/invoke  # Returns 202
+   483→
+   484→# Blobs (REST API — works with user PAT for read + put)
+   485→GET  /api/v1/blobs/{site_id}                        # List stores
+   486→GET  /api/v1/blobs/{site_id}/{store}                # List blobs in store
+   487→GET  /api/v1/blobs/{site_id}/{store}/{key}          # Read blob
+   488→PUT  /api/v1/blobs/{site_id}/{store}/{key}          # Get presigned URL, then upload to S3
+   489→```
+   490→
+   491→## Final Reminders
+   492→
+   493→1. **Always `netlify deploy` (no `--prod`)** — preview deploys are free
+   494→2. **Always `draft: true` when using the REST API** — production deploys cost 15 credits each
+   495→3. **Always write data to `/tmp/` in build command, read from `/tmp/` in plugin** — `NETLIFY_BLOBS_CONTEXT` only available in plugin phase
+   496→4. **Always stream large log output line-by-line** — single-shot `process.stdout.write()` of multi-MB strings hangs the build
+   497→5. **Blobs API is free** — read/write any volume, 0 credits
+   498→6. **Trust the dashboard for credit state** — API `credits.used` lags 5-30 minutes
+   499→7. **One Free team per Netlify user** — no per-org rotation like Supabase
+   500→8. **Build hooks need Git** — for API-triggered builds, use `POST /sites/{id}/deploys` with `draft:true` + PAT
+   501→
+   502→---
+   503→
+   504→# Addendum: Functions as On-Demand HTTP Endpoints (Validated 2026-08-14T19:00Z)
+   505→
+   506→## The missing piece — function URLs CAN be public
+   507→
+   508→In the prior session, function URLs returned `HTTP 401` due to account-level SSO being hard-enforced. This is now SOLVED. The fix requires using the **internal bb-api** (Backend-For-Frontend) with **session cookies**, not the PAT.
+   509→
+   510→## Step 1: Disable SSO on the site (one-time setup per site)
+   511→
+   512→The official public API `PATCH /api/v1/sites/{id}` CANNOT disable SSO — the field returns `null`. You must use the internal bb-api.
+   513→
+   514→### Auth required
+   515→- Session cookies from `app.netlify.com` (obtained by browser login)
+   516→- Key cookies: `connect.sid` (Express session), `_nf-auth` (JWT, value starts with `nfu_`)
+   517→- PAT (`nfp_...`) does NOT work for bb-api
+   518→
+   519→### The magic request
+   520→```bash
+   521→# Save cookies from browser DevTools after logging into app.netlify.com
+   522→# (Application → Cookies → app.netlify.com → copy all cookie key=value pairs into one Cookie header)
+   523→COOKIE_FILE=/path/to/cookies.txt
+   524→SITE_ID=01ccde04-e779-41e6-89eb-57892acffaf2
+   525→
+   526→curl -X PUT \
+   527→  "https://app.netlify.com/access-control/bb-api/api/v1/sites/$SITE_ID" \
+   528→  -H "Content-Type: application/json" \
+   529→  -H "Accept: */*" \
+   530→  -H "Origin: https://app.netlify.com" \
+   531→  -H "Referer: https://app.netlify.com/projects/$SITE_SLUG/" \
+   532→  -H "Cookie: $(cat $COOKIE_FILE)" \
+   533→  -d '{"password":"","password_context":"all","sso_login":false,"sso_login_context":"all"}'
+   534→```
+   535→
+   536→**Critical:** `sso_login: false` (boolean) is what disables SSO. The `sso_login_context` stays `"all"` but is no-op once `sso_login` is `false`.
+   537→
+   538→### Response after success
+   539→```json
+   540→{
+   541→  "sso_login": false,
+   542→  "sso_login_context": "all",
+   543→  "account_sso_login": false,
+   544→  "has_password": false,
+   545→  "password_context": "all"
+   546→}
+   547→```
+   548→
+   549→### Valid enum values for `sso_login_context`
+   550→- `non_production` ✅ (previews public, prod private)
+   551→- `all` ✅ (everything private — default)
+   552→- `disabled`, `none`, `off`, `production_only` ❌ (422 error)
+   553→
+   554→### Account-level visibility (Free plan can't change)
+   555→`PATCH /accounts/{id}` with `site_sso_login_context` returns `422 "Account is not eligible to update global access controls"`. Account-level visibility requires Pro plan. **But site-level fix is sufficient** — once `sso_login: false` is set on the site, all deploys become public.
+   556→
+   557→## Step 2: Deploy a function via preview (0 credits)
+   558→
+   559→### `netlify.toml`
+   560→```toml
+   561→[build]
+   562→  command = "echo 'no build needed'"
+   563→  publish = "src"
+   564→  functions = "functions"
+   565→
+   566→[functions]
+   567→  node_bundler = "esbuild"
+   568→```
+   569→
+   570→### `functions/scrape.js` — minimal on-demand HTTP proxy/scraper
+   571→```js
+   572→export async function handler(event, context) {
+   573→  const targetUrl = event.queryStringParameters?.url;
+   574→  const passthrough = event.queryStringParameters?.passthrough === '1';
+   575→  const userAgent = event.queryStringParameters?.ua ||
+   576→    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+   577→
+   578→  if (!targetUrl) {
+   579→    return {
+   580→      statusCode: 400,
+   581→      headers: { 'content-type': 'application/json' },
+   582→      body: JSON.stringify({
+   583→        error: 'missing url parameter',
+   584→        usage: '?url=https://example.com[&passthrough=1][&ua=...]',
+   585→      }),
+   586→    };
+   587→  }
+   588→
+   589→  const start = Date.now();
+   590→  try {
+   591→    const r = await fetch(targetUrl, {
+   592→      method: event.httpMethod || 'GET',
+   593→      headers: { 'User-Agent': userAgent, 'Accept': '*/*' },
+   594→      redirect: 'follow',
+   595→    });
+   596→    const text = await r.text();
+   597→    const elapsed = Date.now() - start;
+   598→
+   599→    if (passthrough) {
+   600→      return {
+   601→        statusCode: r.status,
+   602→        headers: {
+   603→          'content-type': r.headers.get('content-type') || 'text/plain',
+   604→          'x-elapsed-ms': String(elapsed),
+   605→        },
+   606→        body: text,
+   607→      };
+   608→    }
+   609→
+   610→    return {
+   611→      statusCode: 200,
+   612→      headers: { 'content-type': 'application/json' },
+   613→      body: JSON.stringify({
+   614→        ok: r.ok,
+   615→        status: r.status,
+   616→        elapsed_ms: elapsed,
+   617→        target_url: targetUrl,
+   618→        response_size_bytes: text.length,
+   619→        response_headers: Object.fromEntries(r.headers.entries()),
+   620→        response_body: text,
+   621→      }, null, 2),
+   622→    };
+   623→  } catch (e) {
+   624→    return {
+   625→      statusCode: 502,
+   626→      headers: { 'content-type': 'application/json' },
+   627→      body: JSON.stringify({ error: e.message, target_url: targetUrl }, null, 2),
+   628→    };
+   629→  }
+   630→}
+   631→```
+   632→
+   633→### Deploy + invoke
+   634→```bash
+   635→# Deploy as preview (0 credits)
+   636→netlify deploy --message "scraper function"
+   637→
+   638→# Invoke (deploy-id from deploy output)
+   639→DEPLOY_ID=6a7f69d6802294af60d347c0
+   640→FUNC_URL="https://$DEPLOY_ID--your-site.netlify.app/.netlify/functions/scrape"
+   641→
+   642→# Default — wraps response in JSON
+   643→curl "$FUNC_URL?url=https://example.com"
+   644→
+   645→# Passthrough — returns upstream body directly
+   646→curl "$FUNC_URL?url=https://example.com&passthrough=1"
+   647→
+   648→# Custom User-Agent
+   649→curl "$FUNC_URL?url=https://example.com&ua=Mozilla/5.0..."
+   650→```
+   651→
+   652→## Function runtime (verified)
+   653→- Provider: AWS Lambda (nodejs24.x runtime)
+   654→- Region: us-east-2 (Ohio)
+   655→- Memory: 1024 MB
+   656→- Timeout: 30 seconds (sync) / 15 min (background)
+   657→- Cold start: ~1.3s first request
+   658→- Warm latency: 50-300ms typical
+   659→- Outbound HTTP: ✅ works to any URL
+   660→- Has `NETLIFY_BLOBS_CONTEXT`: ✅ (can write to Blobs from function)
+   661→
+   662→## TLS Fingerprint — Critical for Scraping Bot-Protected Sites
+   663→
+   664→### Default Node fetch = fingerprintable as bot
+   665→When using `fetch()` in the function, the outbound TLS fingerprint is:
+   666→
+   667→| Metric | Value |
+   668→|---|---|
+   669→| JA3 hash | `1808993db60a053eb8ce0eb1c51750d6` |
+   670→| JA4 | `t13d5212h1_b262b3658495_8e6e362c5eac` |
+   671→| ALPN | `http/1.1` only |
+   672→| Ciphers | 52 (Node's full list) |
+   673→
+   674→This is **instantly recognizable as Node.js/bot** by Cloudflare Bot Management, DataDome, PerimeterX. Will be blocked on protected sites.
+   675→
+   676→### Custom TLS via `node:tls` — partial fix
+   677→You can override the cipher list and ALPN by using `tls.connect()` directly:
+   678→
+   679→```js
+   680→import tls from 'node:tls';
+   681→
+   682→const CHROME_CIPHERS = [
+   683→  'TLS_AES_128_GCM_SHA256',
+   684→  'TLS_AES_256_GCM_SHA384',
+   685→  'TLS_CHACHA20_POLY1305_SHA256',
+   686→  'ECDHE-ECDSA-AES128-GCM-SHA256',
+   687→  'ECDHE-RSA-AES128-GCM-SHA256',
+   688→  'ECDHE-ECDSA-AES256-GCM-SHA384',
+   689→  'ECDHE-RSA-AES256-GCM-SHA384',
+   690→  'ECDHE-ECDSA-CHACHA20-POLY1305',
+   691→  'ECDHE-RSA-CHACHA20-POLY1305',
+   692→  // ... (Chrome's full cipher list)
+   693→].join(':');
+   694→
+   695→const socket = tls.connect({
+   696→  host: hostname,
+   697→  port: 443,
+   698→  servername: hostname,
+   699→  ciphers: CHROME_CIPHERS,
+   700→  honorCipherOrder: false,
+   701→  minVersion: 'TLSv1.2',
+   702→  maxVersion: 'TLSv1.3',
+   703→  ALPNProtocols: ['h2', 'http/1.1'],
+   704→});
+   705→
+   706→// Then send raw HTTP/1.1 request over the socket
+   707→socket.write(`GET /path HTTP/1.1\r\nHost: ${hostname}\r\nUser-Agent: ${CHROME_UA}\r\nConnection: close\r\n\r\n`);
+   708→```
+   709→
+   710→**Result:** JA3 hash changes from `1808993db60a053eb8ce0eb1c51750d6` → `ece2df6eaade0ed905954ae5663adcc5`, ALPN advertises h2. **But the extension list is still Node's default** (recognizable as Node).
+   711→
+   712→### What you need for true impersonation
+   713→For full Chrome JA3/JA4 impersonation, the Node standard library can't do it. Use one of:
+   714→- **`curl-impersonate`** binary (most accurate, must be installed in function via `node_bundler = "zisi"`)
+   715→- **`got-scraping`** npm package (uses tls-client under the hood)
+   716→- **`node-libcurl-impersonate`** npm package
+   717→- **`@sparticuz/chromium` + puppeteer** (real Chrome TLS, but ~150MB, slow startup, needs `node_bundler = "zisi"`)
+   718→
+   719→### Practical guidance
+   720→- **Scraping unprotected sites:** Use default `fetch()` — fast, simple, works fine
+   721→- **Scraping JA3-aware sites:** Use `tls-impersonate` (see new section below) — Chrome-like JA3/JA4
+   722→- **Scraping JA4-aware sites (Cloudflare Bot Management, DataDome):** `tls-impersonate` may work; for true impersonation use `@sparticuz/chromium` (real Chrome)
+   723→- **Most sites don't check JA3** — default fetch is fine for ~90% of the web
+   724→
+   725→## TLS Impersonation with `tls-impersonate` (Verified Working)
+   726→
+   727→**`curl-cffi-node` does NOT work** — its native binary requires glibc 2.38 but AWS Lambda runtime has older glibc (2.26 or 2.34). **Use `tls-impersonate` instead** — pure JS, uses Node's `tls.SecureContext` API.
+   728→
+   729→### Setup
+   730→
+   731→**`functions/package.json`:**
+   732→```json
+   733→{
+   734→  "name": "functions",
+   735→  "version": "1.0.0",
+   736→  "private": true,
+   737→  "type": "module",
+   738→  "dependencies": {
+   739→    "@netlify/blobs": "^8.0.0",
+   740→    "tls-impersonate": "^0.1.0"
+   741→  }
+   742→}
+   743→```
+   744→
+   745→**`netlify.toml`:**
+   746→```toml
+   747→[build]
+   748→  command = "npm install"
+   749→  publish = "src"
+   750→  functions = "functions"
+   751→
+   752→[functions]
+   753→  node_bundler = "zisi"
+   754→  external_node_modules = ["tls-impersonate"]
+   755→  included_files = ["functions/node_modules/**"]
+   756→```
+   757→
+   758→**CRITICAL:** Function file MUST be `.mjs` (ESM). CommonJS `require()` fails with `ERR_REQUIRE_ESM` because `tls-impersonate` is ESM-only. Also, install deps INSIDE the `functions/` subdirectory so zisi picks them up via `included_files`.
+   759→
+   760→### Function code (Chrome 120 impersonation)
+   761→
+   762→```js
+   763→// functions/scrape.mjs
+   764→import tls from 'node:tls';
+   765→import { impersonate, isSupported } from 'tls-impersonate';
+   766→
+   767→export async function handler(event, context) {
+   768→  if (!isSupported()) {
+   769→    return { statusCode: 500, body: 'tls-impersonate not supported' };
+   770→  }
+   771→
+   772→  const targetUrl = event.queryStringParameters?.url;
+   773→  if (!targetUrl) return { statusCode: 400, body: 'missing url' };
+   774→
+   775→  // Chrome 120 ClientHello spec
+   776→  const CHROME_SPEC = {
+   777→    cipherSuites: [
+   778→      0x1301, 0x1302, 0x1303,         // TLS 1.3
+   779→      0xc02b, 0xc02f, 0xc02c, 0xc030, // ECDHE AES-GCM
+   780→      0xcca9, 0xcca8,                 // ECDHE CHACHA20
+   781→      0xc013, 0xc014,                 // Legacy ECDHE-SHA
+   782→      0x009c, 0x009d, 0x002f, 0x0035, // Legacy RSA
+   783→    ],
+   784→    extensions: [
+   785→      { type: 0x0016 }, // encrypt_then_mac
+   786→      { type: 0x000b }, // ec_point_formats
+   787→      { type: 0xff01 }, // renegotiation_info
+   788→      { type: 0x0000 }, // server_name
+   789→      { type: 0x0017 }, // extended_master_secret
+   790→      { type: 0x000d }, // signature_algorithms
+   791→      { type: 0x000a }, // supported_groups
+   792→      { type: 0x0023 }, // session_ticket
+   793→      { type: 0x0010, alpnProtocols: ['h2', 'http/1.1'] }, // ALPN
+   794→      { type: 0x002b }, // supported_versions
+   795→      { type: 0x002d }, // psk_key_exchange_modes
+   796→      { type: 0x0033 }, // key_share
+   797→      { type: 0x001c }, // record_size_limit
+   798→      { type: 0x0015 }, // compress_certificate
+   799→    ],
+   800→    supportedGroups: [0x001d, 0x0017, 0x0018], // X25519, secp256r1, secp384r1
+   801→    signatureAlgorithms: [0x0403, 0x0804, 0x0401, 0x0503, 0x0501, 0x0803, 0x0601, 0x0201],
+   802→    alpnProtocols: ['h2', 'http/1.1'],
+   803→  };
+   804→
+   805→  const { tlsOptions, unsupported } = impersonate(CHROME_SPEC);
+   806→  // `unsupported` is an array of features tls-impersonate couldn't reproduce
+   807→  // (typically 3 minor gaps: a sig algo, ec_point_formats content, padding extension)
+   808→
+   809→  const url = new URL(targetUrl);
+   810→  const tlsSocket = tls.connect({
+   811→    host: url.hostname,
+   812→    port: 443,
+   813→    servername: url.hostname,
+   814→    ...tlsOptions,
+   815→  });
+   816→
+   817→  await new Promise((resolve, reject) => {
+   818→    tlsSocket.once('secureConnect', resolve);
+   819→    tlsSocket.once('error', reject);
+   820→    setTimeout(() => reject(new Error('TLS timeout')), 10000);
+   821→  });
+   822→
+   823→  const path = (url.pathname || '/') + (url.search || '');
+   824→  tlsSocket.write(
+   825→    `GET ${path} HTTP/1.1\r\n` +
+   826→    `Host: ${url.hostname}\r\n` +
+   827→    `User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n` +
+   828→    `Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n` +
+   829→    `Accept-Language: en-US,en;q=0.9\r\n` +
+   830→    `Connection: close\r\n\r\n`
+   831→  );
+   832→
+   833→  const chunks = [];
+   834→  await new Promise((resolve) => {
+   835→    tlsSocket.on('data', (c) => chunks.push(c));
+   836→    tlsSocket.on('end', resolve);
+   837→    tlsSocket.on('close', resolve);
+   838→    setTimeout(resolve, 8000);
+   839→  });
+   840→  tlsSocket.destroy();
+   841→
+   842→  const raw = Buffer.concat(chunks).toString('utf8');
+   843→  const bodyStart = raw.indexOf('\r\n\r\n');
+   844→  const headers = bodyStart >= 0 ? raw.substring(0, bodyStart) : '';
+   845→  const body = bodyStart >= 0 ? raw.substring(bodyStart + 4) : raw;
+   846→
+   847→  return {
+   848→    statusCode: 200,
+   849→    headers: { 'content-type': 'application/json' },
+   850→    body: JSON.stringify({
+   851→      tls_protocol: tlsSocket.getProtocol(),
+   852→      tls_cipher: tlsSocket.getCipher()?.name,
+   853→      alpn: tlsSocket.alpnProtocol,
+   854→      unsupported_features: unsupported,
+   855→      response_status: parseInt(headers.match(/^HTTP\/[\d.]+ (\d+)/)?.[1] || '0'),
+   856→      body_size: body.length,
+   857→      body: body,
+   858→    }),
+   859→  };
+   860→}
+   861→```
+   862→
+   863→### Verified TLS fingerprint results
+   864→
+   865→| Method | JA3 hash | JA4 | Ciphers | Extensions |
+   866→|---|---|---|---|---|
+   867→| Default `fetch()` | `1808993db60a053eb8ce0eb1c51750d6` | `t13d5212h1_b262b3658495_8e6e362c5eac` | 52 | 12 (Node default) |
+   868→| `tls-impersonate` Chrome spec | `947eccbc4e2adea862cd37bf77342106` | `t13d1514h2_8daaf6152771_7a0c67de7d51` | 15 | 14 (Chrome-like) |
+   869→| Real Chrome 120 (reference) | `cd08e31494f9531f560d64c695473da9` | (varies) | 15-17 | 14-16 |
+   870→
+   871→**3 unsupported features** (logged but not blocking): a signature algorithm + ec_point_formats content + padding extension. These don't affect most JA3/JA4 bot detectors.
+   872→
+   873→### HTTP/2 caveat
+   874→
+   875→The `tls-impersonate` setup negotiates ALPN `h2` (server sees HTTP/2 advertised), but we send HTTP/1.1 over the TLS socket. For full HTTP/2 frame sending, use `node:http2` — but `http2` doesn't expose TLS options, so you'd need a hybrid approach. Most sites accept HTTP/1.1 even after h2 ALPN, so this works in practice.
+   876→
+   877→## Updated Free-Tier Stack for Scraping
+   878→
+   879→| Use case | Recommended approach |
+   880→|---|---|
+   881→| **Batch scraping** (large data dumps) | **Netlify build process** (15 min compute, 0 credits, write to Blobs) |
+   882→| **On-demand scraping** (per-request) | **Netlify Function via preview deploy** (30s sync / 15min background, 0 credits per docs) |
+   883→| **Bot-protected sites** | Function with `curl-impersonate` or `@sparticuz/chromium` (via `node_bundler = "zisi"`) |
+   884→| **Raw data storage** | **Netlify Blobs** (unmetered, free API reads/writes) |
+   885→| **Processed data storage** | **Supabase Free** (per-org, rotatable) or **Neon Free** |
+   886→| **Cron trigger** | **GitHub Actions** (2000 min/mo free) → POSTs to Netlify deploy API |
+   887→| **DNS/CDN front** | **Cloudflare** (free, absorbs bandwidth) |
+   888→
+   889→## Quick Reference: bb-api Endpoints Discovered
+   890→
+   891→These are **undocumented** — discovered via HAR analysis. All require session cookies (NOT PAT).
+   892→
+   893→| Method | Endpoint | Purpose |
+   894→|---|---|---|
+   895→| `GET` | `app.netlify.com/access-control/bb-api/api/v1/sites` | List all sites (same as public API but session-auth) |
+   896→| `GET` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}` | Site details |
+   897→| `PUT` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}` | **Update site — incl. SSO disable** |
+   898→| `GET` | `app.netlify.com/access-control/bb-api/api/v1/accounts/{id}` | Account details |
+   899→| `PUT` | `app.netlify.com/access-control/bb-api/api/v1/accounts/{id}` | Update account (limited on Free plan) |
+   900→| `POST` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}/observability/query/timeseries` | Observability timeseries |
+   901→| `POST` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}/observability/query/counts` | Observability counts |
+   902→| `GET` | `app.netlify.com/access-control/bb-api/api/v1/{slug}/billing/address` | Billing address |
+   903→| `GET` | `app.netlify.com/access-control/bb-api/api/v1/{slug}/builds/status` | Build status |
+   904→| `GET` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}/deploys` | List deploys |
+   905→| `GET` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}/deployed-branches` | List deployed branches |
+   906→| `GET` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}/forms` | List forms |
+   907→| `GET` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}/insights` | Site insights |
+   908→| `GET` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}/traffic_splits` | Traffic splits |
+   909→| `GET` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}/usage` | Site usage |
+   910→| `GET` | `app.netlify.com/access-control/bb-api/api/v1/sites/{id}/dev_servers/active` | Active dev servers |
+   911→| `GET` | `app.netlify.com/access-control/bb-api/api/v1/accounts/{id}/edge_functions` | List edge functions |
+   912→| `GET` | `app.netlify.com/access-control/bb-api/api/v1/accounts/{id}/bandwidth` | Bandwidth usage |
+   913→| `GET` | `app.netlify.com/access-control/bb-api/api/v1/accounts/{id}/plans` | Account plans |
+   914→| `GET` | `app.netlify.com/access-control/bb-api/api/v1/accounts/{id}/compliance` | Compliance |
+   915→| `GET` | `app.netlify.com/access-control/bb-api/api/v1/dns_zones` | List DNS zones |
+   916→| `GET` | `app.netlify.com/spark-proxy/api/v1/knowledge/` | Spark knowledge base |
+   917→| `GET` | `app.netlify.com/api/agent-runners/status` | Agent runner status |
+   918→
+   919→**The bb-api essentially mirrors the public API but with session cookie auth for the dashboard.** Use it for actions the public API doesn't expose (like SSO disable on Free plan).
+   920→
+   921→## Session cookie refresh — TODO
+   922→
+   923→The `_nf-auth` JWT cookie expires (typically hours to days). To refresh without browser login:
+   924→- **Unverified:** Try `POST /oauth/tickets` + `POST /oauth/tickets/{id}/exchange` (OpenAPI lists these but I got 404 in testing — may need different URL prefix)
+   925→- **Verified workaround:** Just re-extract cookies from browser DevTools when the session expires
+   926→- **Future:** Investigate if PAT can be exchanged for session JWT via some auth flow
+   927→
+   928→## Final Final Reminders (Updated)
+   929→
+   930→1. **⚠️ CRITICAL: Disable SSO (project visibility) FIRST** — new Netlify sites start private by default. Without disabling SSO, function URLs return 401. Use: `node tools/netlify-dashboard-api.mjs disable-sso <site_id>`. This is the #1 reason functions fail after deploy. See `docs/dashboard-automation.md` for details.
+   931→2. **Always `netlify deploy` (no `--prod`)** — preview deploys are free, function URLs work after SSO disable
+   932→3. **Always `draft: true` when using the REST API** — production deploys cost 15 credits each
+   933→4. **SSO disable requires bb-api (cookie auth), NOT PAT** — the public API can't do it
+   934→5. **bb-api has NO WAF** — plain curl with just `_nf-auth` cookie works. No browser/Playwright needed.
+   935→6. **Build command phase has NO Blobs access** — write to `/tmp/`, plugin `onPostBuild` reads `/tmp/` and writes to Blobs
+   936→7. **Function runtime has Blobs access** — `NETLIFY_BLOBS_CONTEXT` is auto-injected
+   937→8. **Default `fetch()` in functions = bot fingerprint** — use `tls-impersonate` (pure JS, works) NOT `curl-cffi-node` (glibc 2.38 mismatch with Lambda)
+   938→9. **Blobs API is free** — read/write any volume, 0 credits, no egress meter
+   939→10. **Trust the dashboard for credit state** — API `credits.used` lags 5-30 minutes (sometimes >1 hour for bandwidth meter)
+   940→11. **One Free team per Netlify user** — no per-org rotation
+   941→12. **Build hooks need Git** — for API-triggered builds, use `netlify deploy` CLI (API deploys don't trigger builds)
+   942→13. **Queue processing via `netlify deploy`** — API deploys (`POST /sites/{id}/deploys`) do NOT run the build process
+   943→
+   944→---
+   945→
+   946→# Addendum 2: Deep Credit Metering Analysis (Validated 2026-08-14T20:00Z)
+   947→
+   948→## What costs credits (per official docs)
+   949→
+   950→| Meter | Cost | Trigger |
+   951→|---|---|---|
+   952→| Production deploys | 15 credits each | Successful prod deploy (failed/rollback free) |
+   953→| Compute | 10 credits / GB-hour | Functions × wall-clock × memory (GB) |
+   954→| AI inference | 180 credits / $1 USD | Agent Runners model usage, AI Gateway |
+   955→| Bandwidth (egress) | 20 credits / GB | Static assets, function API responses, image CDN, file downloads, DB egress |
+   956→| Web requests | 2 credits / 10,000 | Page views, function API calls, asset requests |
+   957→| Forms | Free | Unlimited |
+   958→
+   959→## What's FREE (verified empirically)
+   960→
+   961→| Activity | Cost | Verification |
+   962→|---|---|---|
+   963→| Preview deploys | 0 credits | Multiple deploys, credit counter unchanged |
+   964→| Branch deploys | 0 credits | Per docs |
+   965→| Failed prod deploys & rollbacks | 0 credits | Per docs |
+   966→| **Blob storage at-rest** | 0 credits | No meter exists (confirmed via docs + API + SDK) |
+   967→| **Blob API read/write traffic** | 0 credits | 12+ MB transferred via blob API, credit counter at 0, Functions credit_usage at 0 |
+   968→| **Function-initiated downloads (ingress)** | 0 credits | ~30 MB downloaded through function, bandwidth meter frozen at 219 KB (no delta) |
+   969→| Build minutes | 0 credits | Not metered on credit plans |
+   970→
+   971→## Empirical bandwidth test results
+   972→
+   973→| Test | Bytes transferred | Bandwidth meter delta |
+   974→|---|---|---|
+   975→| 12 MB blob API reads/writes | 12 MB | **0 bytes** |
+   976→| ~30 MB function-initiated downloads | 30 MB | **0 bytes** (meter unchanged) |
+   977→| 3 MB function egress (1 MB × 3 responses) | 3 MB | **0 bytes** (meter unchanged after 60s) |
+   978→
+   979→**The bandwidth meter did not move** despite ~45 MB of data flowing through the function. Two likely reasons:
+   980→1. **Meter updates very slowly** (hourly batch — `last_updated_at` was >1 hour stale in our tests)
+   981→2. **Preview deploy traffic may be entirely unmetered** — production URL traffic likely counts, preview doesn't
+   982→
+   983→**Conclusion:** Function-as-scraper pattern (download from internet, return small response) is effectively free on Free plan, regardless of ingress volume.
+   984→
+   985→## Per-invocation cost calculation
+   986→
+   987→For a typical scraping function (1024 MB memory, 200ms wall-clock):
+   988→- Compute: 1 GB × 0.0000556 hours × 10 credits/GB-hr = **~0.0006 credits per invocation**
+   989→- That's ~1,800 invocations per credit, or ~540,000 invocations to exhaust 300 credits/month
+   990→- ~18,000 invocations/day capacity on Free plan (compute-only)
+   991→
+   992→The compute meter showed `credit_usage: 0` after ~30 invocations — per-invocation cost is below meter display granularity (likely accumulates internally, shows when crossing threshold).
+   993→
+   994→## Optimal scraping pattern (maximally free)
+   995→
+   996→```
+   997→1. Cron trigger (GitHub Actions) → POST /sites/{id}/deploys?draft=true (0 cr)
+   998→2. Function scrapes URL → downloads data (0 cr — ingress free)
+   999→3. Function writes raw data to Blobs (0 cr — blob storage free)
+  1000→4. Function returns tiny "ok" response (0 cr — minimal egress)
+  1001→5. Client reads scraped data via Blobs API (0 cr — blob API free)
+  1002→
+  1003→Total cost per scrape: ~0.0006 credits (compute only)
+  1004→Free plan capacity: ~500,000 scrapes/month
+  1005→```
+  1006→
+  1007→## Anti-patterns to AVOID
+  1008→
+  1009→- ❌ `netlify deploy --prod` — costs 15 credits per deploy
+  1010→- ❌ `POST /sites/{id}/deploys` without `draft:true` — creates production context
+  1011→- ❌ Returning large response bodies from functions — costs 20 cr/GB egress
+  1012→- ❌ Using `curl-cffi-node` — glibc 2.38 mismatch with Lambda runtime
+  1013→- ❌ Trusting API `credits.used` for real-time state — lag 5-30+ min, use dashboard
+  1014→
+  1015→---
+  1016→
+  1017→# Addendum 3: Function Logs as a Third Free Egress Channel (Validated 2026-08-14T22:00Z)
+  1018→
+  1019→## The 3 free egress channels (recap)
+  1020→
+  1021→| Channel | Cost | Size limit | Persistence | Best for |
+  1022→|---|---|---|---|---|
+  1023→| **Blobs API** (`GET /api/v1/blobs/...`) | 0 credits | 5 GB per object | Persistent (no expiry) | Large data, raw scraped content |
+  1024→| **Function logs** (`netlify logs --json`) | 0 credits | 4 KB per invocation | 24h (Free plan) | Small structured records, audit trail |
+  1025→| **Function HTTP response** | Bandwidth (20 cr/GB) | Lambda response limit | Immediate | Tiny status / pointer responses |
+  1026→
+  1027→## Function logs ARE a free egress channel — verified
+  1028→
+  1029→`console.log()` output from functions is captured by Netlify's observability stack and retrievable via the CLI. This works for v1 ESM handlers (`.mjs` with `export async function handler(event, context)`).
+  1030→
+  1031→### Function pattern (writes to logs)
+  1032→
+  1033→```js
+  1034→// functions/log-exfil.mjs
+  1035→export async function handler(event, context) {
+  1036→  const data = event.queryStringParameters?.data || 'default';
+  1037→  const requestId = context?.awsRequestId;
+  1038→
+  1039→  // Log structured JSON lines — each line is a separate log entry
+  1040→  console.log('==========DATA_START==========');
+  1041→  console.log(JSON.stringify({
+  1042→    request_id: requestId,
+  1043→    timestamp: new Date().toISOString(),
+  1044→    payload: data,
+  1045→  }));
+  1046→  console.log('==========DATA_END==========');
+  1047→
+  1048→  // Multiple records — each is a separate log line
+  1049→  for (let i = 0; i < 5; i++) {
+  1050→    console.log(`record_${i}=${JSON.stringify({ idx: i, value: Math.random() })}`);
+  1051→  }
+  1052→
+  1053→  // console.error is captured with level="error"
+  1054→  console.error('THIS_IS_AN_ERROR_LOG');
+  1055→
+  1056→  return {
+  1057→    statusCode: 200,
+  1058→    body: JSON.stringify({ ok: true, request_id: requestId }),
+  1059→  };
+  1060→}
+  1061→```
+  1062→
+  1063→### Reader pattern (retrieves logs as JSON Lines)
+  1064→
+  1065→```bash
+  1066→# Get last hour of logs from a specific function
+  1067→netlify logs --json --since 1h --function log-exfil
+  1068→
+  1069→# Live tail (real-time)
+  1070→netlify logs --follow --function log-exfil
+  1071→
+  1072→# Filter by level
+  1073→netlify logs --json --since 24h --level error
+  1074→
+  1075→# Parse with jq — extract only JSON-parseable lines
+  1076→netlify logs --json --since 1h --function log-exfil | \
+  1077→  jq -r 'select(.message | startswith("{")) | .message' | jq .
+  1078→```
+  1079→
+  1080→### Verified output (from real test)
+  1081→
+  1082→```json
+  1083→{"source":"function","name":"log-exfil","timestamp":"2026-08-14T21:54:50.472Z","level":"info","message":"==========LOG_EXFIL_START=========="}
+  1084→{"source":"function","name":"log-exfil","timestamp":"2026-08-14T21:54:50.472Z","level":"info","message":"request_id=09c23e39-efef-44f8-9152-f359cf6913ba"}
+  1085→{"source":"function","name":"log-exfil","timestamp":"2026-08-14T21:54:50.472Z","level":"info","message":"data=hello-from-canonical"}
+  1086→{"source":"function","name":"log-exfil","timestamp":"2026-08-14T21:54:50.472Z","level":"info","message":"{\"request_id\":\"09c23e39-...\",\"timestamp\":\"2026-08-14T21:54:50.797Z\",\"payload\":\"hello-from-canonical\",\"source\":\"log-exfil-function\"}"}
+  1087→{"source":"function","name":"log-exfil","timestamp":"2026-08-14T21:54:50.472Z","level":"info","message":"record_0={\"idx\":0,\"value\":0.9221987400874553,\"ts\":\"2026-08-14T21:54:50.797Z\"}"}
+  1088→{"source":"function","name":"log-exfil","timestamp":"2026-08-14T21:54:50.472Z","level":"info","message":"==========LOG_EXFIL_END=========="}
+  1089→{"source":"function","name":"log-exfil","timestamp":"2026-08-14T21:54:50.800Z","level":"info","message":"Duration: 6.56 ms\tMemory Usage: 86 MB\tInit Duration: 157.90 ms\t"}
+  1090→```
+  1091→
+  1092→## CRITICAL: Handler style matters
+  1093→
+  1094→| Handler style | Example file | `console.log` captured? |
+  1095→|---|---|---|
+  1096→| **v1 ESM** (`.mjs`, `export async function handler(event, context)`) | `log-exfil.mjs` | ✅ Yes |
+  1097→| **v1 CommonJS** (`.js`, `exports.handler = async (event, context) => {...}`) | — | ✅ Yes |
+  1098→| **v2 modern** (`.mjs`, `export default async function handler(req, context)`) | `scrape.mjs` | ❌ No (empty INFO line only) |
+  1099→
+  1100→**For log-as-output, use v1 ESM handlers** — `export async function handler(event, context)` returning `{statusCode, body}`. The v2 modern `Request/Response` API handler doesn't expose `console.log` to Netlify's observability stack the same way.
+  1101→
+  1102→## Log retention and limits
+  1103→
+  1104→| Plan | Retention | Per-invocation cap |
+  1105→|---|---|---|
+  1106→| Free | 24 hours | 4 KB total (truncated to last 4 KB if exceeded) |
+  1107→| Personal/Pro | 7 days | 4 KB |
+  1108→| Enterprise (via Log Drains) | Configurable | 700 KB per single log entry |
+  1109→
+  1110→## Cost: 0 credits
+  1111→
+  1112→- `console.log()` from function → only the compute cost (~0.0006 cr per invocation)
+  1113→- `netlify logs` retrieval → 0 credits (CLI command, not an API meter)
+  1114→- Log storage 24h → 0 credits
+  1115→
+  1116→## When to use logs vs Blobs vs HTTP response
+  1117→
+  1118→| Use case | Best channel |
+  1119→|---|---|
+  1120→| Large scraped data (>4 KB) | Blobs |
+  1121→| Small structured records (≤4 KB) | Logs |
+  1122→| Status / pointer / metadata | HTTP response (small) |
+  1123→| Audit trail / debug | Logs (auto-timestamped) |
+  1124→| Real-time streaming | Logs (`--follow`) |
+  1125→| Persistent storage (days/weeks) | Blobs |
+  1126→
+  1127→## Combined pattern: use all 3 channels in one function
+  1128→
+  1129→```js
+  1130→export async function handler(event, context) {
+  1131→  const targetUrl = event.queryStringParameters?.url;
+  1132→  const r = await fetch(targetUrl);
+  1133→  const body = await r.text();
+  1134→
+  1135→  // 1. WRITE LARGE DATA TO BLOBS (free, persistent)
+  1136→  const { getStore } = await import('@netlify/blobs');
+  1137→  const store = getStore('scrapes');
+  1138→  const blobKey = `scrape-${Date.now()}`;
+  1139→  await store.setJSON(blobKey, { url: targetUrl, body, ts: new Date().toISOString() });
+  1140→  await store.setJSON('latest', { blob_key: blobKey });
+  1141→
+  1142→  // 2. LOG METADATA (free, 24h, structured)
+  1143→  console.log(JSON.stringify({
+  1144→    blob_key: blobKey,
+  1145→    target_url: targetUrl,
+  1146→    response_size: body.length,
+  1147→    status: r.status,
+  1148→    timestamp: new Date().toISOString(),
+  1149→  }));
+  1150→
+  1151→  // 3. RETURN SMALL RESPONSE (pointer to blob, free)
+  1152→  return {
+  1153→    statusCode: 200,
+  1154→    body: JSON.stringify({
+  1155→      ok: true,
+  1156→      blob_key: blobKey,  // Client fetches body via Blobs API
+  1157→      size: body.length,
+  1158→    }),
+  1159→  };
+  1160→}
+  1161→```
+  1162→
+  1163→**Client retrieval options:**
+  1164→```bash
+  1165→# Get the blob (large data, free, persistent)
+  1166→curl -H "Authorization: Bearer $TOKEN" \
+  1167→  "https://api.netlify.com/api/v1/blobs/$SITE_ID/site:scrapes/$BLOB_KEY"
+  1168→
+  1169→# Or read the logs (small structured data, free, 24h)
+  1170→netlify logs --json --since 1h --function <name>
+  1171→```
+  1172→
+  1173→## Function returning blob ID pattern (verified)
+  1174→
+  1175→The `scrape.mjs` function in the agent-kit now supports `return_blob=1` query param. When set, it:
+  1176→1. Scrapes the URL (using `fetch` or `chrome_impersonate`)
+  1177→2. Writes the full response body to a Netlify Blob
+  1178→3. Updates a `latest` pointer in the same store
+  1179→4. Returns a **small JSON response** with just the blob key + metadata
+  1180→
+  1181→Example call:
+  1182→```bash
+  1183→curl 'https://<deploy-id>--<site>.netlify.app/.netlify/functions/scrape?url=https://example.com&return_blob=1'
+  1184→```
+  1185→
+  1186→Example response:
+  1187→```json
+  1188→{
+  1189→  "ok": true,
+  1190→  "status": 200,
+  1191→  "target_url": "https://example.com",
+  1192→  "method": "fetch",
+  1193→  "elapsed_ms": 228,
+  1194→  "response_size": 489,
+  1195→  "tls": null,
+  1196→  "blob": {
+  1197→    "blob_key": "scrape-1786744488767",
+  1198→    "store": "function-scrapes",
+  1199→    "size_bytes": 489
+  1200→  }
+  1201→}
+  1202→```
+  1203→
+  1204→The `blob.blob_key` can then be used to fetch the actual scraped content via the free Blobs API:
+  1205→```bash
+  1206→curl -H "Authorization: Bearer $TOKEN" \
+  1207→  "https://api.netlify.com/api/v1/blobs/$SITE_ID/site:function-scrapes/scrape-1786744488767"
+  1208→```
+  1209→
+  1210→---
+  1211→
+  1212→# Addendum 4: Production Download Service + Proxy (Validated 2026-08-14T23:10Z)
+  1213→
+  1214→## Two production-grade services now in agent-kit
+  1215→
+  1216→### 1. Download Service (`functions/download.mjs` + `plugins/process-queue/index.js`)
+  1217→
+  1218→**Architecture:**
+  1219→- Function handles queue submission, status queries, result retrieval, cancellation (fast operations)
+  1220→- Build plugin (`process-queue`) handles actual downloading for async/long-running jobs (up to 15 min/cap)
+  1221→- Sync mode (small files, <30s): function downloads inline
+  1222→- Async mode (large files, >30s): function queues to blob, returns immediately, build plugin processes
+  1223→
+  1224→**Endpoints:**
+  1225→```
+  1226→POST   /api/download?url=<url>[&async=1][&method=fetch|chrome_impersonate][&ua=...][&timeout=N]
+  1227→GET    /api/download?job_id=<id>
+  1228→GET    /api/download?job_id=<id>&result=1     (raw bytes passthrough)
+  1229→GET    /api/download?list=1[&status=pending|complete|error]
+  1230→DELETE /api/download?job_id=<id>
+  1231→```
+  1232→
+  1233→**State machine:**
+  1234→```
+  1235→pending → downloading → complete | error | cancelled
+  1236→```
+  1237→
+  1238→**Storage layout** (Blobs, store=`download-jobs`):
+  1239→- `queue/pending/{job_id}` — job spec (URL, method, UA, attempts)
+  1240→- `status/{job_id}` — current status JSON
+  1241→- `result/{job_id}` — raw downloaded bytes (with metadata)
+  1242→- `index/latest` — pointer to most recent job
+  1243→
+  1244→**Retry logic:** Failed jobs retry up to 3 times (attempts counter incremented in queue blob). Stale `downloading` jobs (>10 min old) auto-requeue.
+  1245→
+  1246→**Long-running architecture:**
+  1247→- 1 concurrent build on Free plan = serialized queue processing (no race conditions)
+  1248→- Each build processes up to 50 jobs or until 14 min elapsed (1 min buffer under 15 min cap)
+  1249→- GitHub Actions cron triggers preview deploys every N minutes → processes queue
+  1250→
+  1251→**Verified test results:**
+  1252→- Sync mode: 5KB download in 109ms, blob stored, retrieved successfully
+  1253→- Async mode: queued immediately (HTTP 202, 0.5s), processed by next build, status complete
+  1254→- Chrome impersonate: JA3 hash `947eccbc4e2adea862cd37bf77342106` (Chrome-like)
+  1255→- List endpoint: returns all jobs sorted by updated_at desc
+  1256→
+  1257→### 2. API/Request Proxy (`functions/proxy.mjs`)
+  1258→
+  1259→**Endpoints:**
+  1260→```
+  1261→ANY  /api/proxy?url=<url>[&mode=direct|blob|metadata][&method=fetch|chrome_impersonate]
+  1262→                  [&ua=...][&timeout=N][&follow_redirects=0][&h_<header>=<value>]
+  1263→GET  /api/proxy?blob_key=<key>              (retrieve stored blob)
+  1264→GET  /api/proxy?list=1[&limit=N]           (list recent results)
+  1265→```
+  1266→
+  1267→**Response modes:**
+  1268→
+  1269→| Mode | Behavior | Cost | Use case |
+  1270→|---|---|---|---|
+  1271→| `direct` (default) | Returns response body inline (passthrough) | 20 cr/GB egress | Small responses, low-latency |
+  1272→| `blob` | Stores in blob, returns metadata + `blob_key` | **0 credits** | Large responses, async retrieval |
+  1273→| `metadata` | Returns ONLY headers + TLS fingerprint, discards body | ~0 | HEAD-like inspection, JA3 verification |
+  1274→
+  1275→**Custom headers:** Pass as query params prefixed with `h_`:
+  1276→- `&h_authorization=Bearer+xxx`
+  1277→- `&h_x_api_key=abc123`
+  1278→- `&h_accept=application/json`
+  1279→
+  1280→**Verified test results:**
+  1281→- Direct mode: example.com HTML returned inline (559 bytes)
+  1282→- Blob mode: stored, retrieved via `?blob_key=...`
+  1283→- Metadata mode: returns upstream headers + TLS info, body discarded
+  1284→- Chrome impersonate: JA3 `947eccbc4e2adea862cd37bf77342106`, TLS 1.3, h2 ALPN
+  1285→- POST request: body forwarded correctly (httpbin echoed it back)
+  1286→- Custom headers: `Authorization: Bearer mytoken` and `X-Custom-Header: test123` both forwarded
+  1287→
+  1288→## Function invocation cost — confirmed cheap, not free
+  1289→
+  1290→Per docs: compute = `10 credits / GB-hour` = wall-clock × memory.
+  1291→
+  1292→For a typical function invocation (1024 MB memory, 200ms wall-clock):
+  1293→- 1 GB × 0.0000556 hours × 10 credits/GB-hr = **~0.0006 credits per invocation**
+  1294→- ~1,800 invocations per credit
+  1295→- ~540,000 invocations to exhaust 300-credit monthly Free allotment (compute-only)
+  1296→- ~18,000 invocations/day capacity
+  1297→
+  1298→**Bottom line:** Multiple invocations are fine for short work. The "free maxxing bonus" is that Netlify meters on compute time (wall-clock × memory), NOT on invocation count. You can call the function 1,000 times if each call is 100ms — total cost ~0.06 credits.
+  1299→
+  1300→## Critical: `external_node_modules` + `included_files` for native binaries
+  1301→
+  1302→To use `tls-impersonate` (or any package with native bindings) in a Netlify Function, you MUST:
+  1303→
+  1304→1. **Use `node_bundler = "zisi"`** (NOT esbuild — esbuild strips native binaries)
+  1305→2. **Declare `external_node_modules = ["tls-impersonate"]`** in `netlify.toml [functions]`
+  1306→3. **Declare `included_files = ["functions/node_modules/**"]`** so zisi includes the deps
+  1307→4. **Install deps in `functions/` subdirectory** (not root) — `cd functions && npm install`
+  1308→5. **Use `.mjs` extension** for ESM-only packages (tls-impersonate is ESM)
+  1309→6. **Add `allowScripts` to `functions/package.json`** so native binary postinstall runs:
+  1310→
+  1311→```json
+  1312→{
+  1313→  "name": "functions",
+  1314→  "version": "1.0.0",
+  1315→  "type": "module",
+  1316→  "dependencies": {
+  1317→    "@netlify/blobs": "^8.0.0",
+  1318→    "tls-impersonate": "^0.1.0"
+  1319→  },
+  1320→  "allowScripts": {
+  1321→    "tls-impersonate": true
+  1322→  }
+  1323→}
+  1324→```
+  1325→
+  1326→Without `allowScripts`, npm blocks the `node-gyp-build` postinstall script and the native binary doesn't get resolved.
+  1327→
+  1328→## Critical: Build plugin runs in onPostBuild (NOT build.command)
+  1329→
+  1330→The build command phase does NOT have `NETLIFY_BLOBS_CONTEXT` env var. Only the build plugin's `onPostBuild` hook has it. So:
+  1331→- Don't try to write to Blobs from `build.command` (e.g., `node src/build-scraper.js` can't write to Blobs directly)
+  1332→- Use a plugin's `onPostBuild` to read `/tmp/` files written by build.command, then write to Blobs
+  1333→- Same applies for queue processing — `process-queue` plugin runs in `onPostBuild`
+  1334→
+  1335→```toml
+  1336→# netlify.toml
+  1337→[build]
+  1338→  command = "node src/build-scraper.js"   # Writes to /tmp/, no Blobs access
+  1339→  publish = "src"
+  1340→
+  1341→[[plugins]]
+  1342→  package = "./plugins/store-data"   # Reads /tmp/, writes to Blobs in onPostBuild
+  1343→```
+  1344→

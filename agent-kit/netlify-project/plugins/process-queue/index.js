@@ -263,10 +263,9 @@ async function processBatchBuild(batchSpec, buildStartMs) {
     }
   }
 
-  // Dequeue BEFORE writing terminal status — so if build crashes between,
-  // the batch is re-processed (idempotent — overwrites existing results)
-  await dequeueBatch(batch_id);
-
+  // Write terminal status FIRST, then dequeue — so if build crashes between,
+  // the batch has terminal status but queue entry still exists → next build
+  // sees it in pendingBatches and reprocesses (idempotent — overwrites results)
   await setBatchStatus(batch_id, status, {
     job_count: jobs.length,
     succeeded,
@@ -278,6 +277,8 @@ async function processBatchBuild(batchSpec, buildStartMs) {
     options,
     results: resultsSummary(results),
   });
+
+  await dequeueBatch(batch_id);
 
   console.log(`BATCH_COMPLETE batch_id=${batch_id} status=${status} succeeded=${succeeded} failed=${failed} skipped=${skipped} requeued=${requeuedCount} ms=${elapsedMs}`);
   return { batch_id, status, succeeded, failed, skipped, requeued: requeuedCount };

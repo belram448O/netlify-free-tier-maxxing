@@ -23,7 +23,7 @@ try {
 } catch (e) {
   console.error(`Cannot read cookie file: ${COOKIE_FILE}`);
   console.error('Extract cookies from browser DevTools, then save as a single Cookie: header value.');
-  console.error('Required cookies: connect.sid, _nf-auth (the JWT, value starts with nfu_)');
+  console.error('Required cookie: _nf-auth only (WAF tested — connect.sid NOT needed)');
   process.exit(1);
 }
 

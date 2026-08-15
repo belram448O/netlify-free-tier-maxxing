@@ -513,7 +513,7 @@ The official public API `PATCH /api/v1/sites/{id}` CANNOT disable SSO — the fi
 
 ### Auth required
 - Session cookies from `app.netlify.com` (obtained by browser login)
-- Key cookies: `connect.sid` (Express session), `_nf-auth` (JWT, value starts with `nfu_`)
+- Key cookie: `_nf-auth` only (WAF tested — connect.sid NOT needed). Value starts with `nfu_`.
 - PAT (`nfp_...`) does NOT work for bb-api
 
 ### The magic request

@@ -12,7 +12,7 @@ https://6a7fba0ba3bffe9e51e12005--transcendent-cheesecake-03f934.netlify.app/api
 ### Authentication (REQUIRED)
 All requests to `/api/scrape` must include:
 ```
-Authorization: Bearer nfp_YfWhZCYLjYQatPEcpjDPB5WGRD8RRKaGec87
+Authorization: Bearer <YOUR_NETLIFY_PAT>
 ```
 
 ### Blob store (read results — requires same PAT)
@@ -27,7 +27,7 @@ Store:   scraper-results (in API: site:scraper-results)
 curl -X POST \
   'https://6a7fba0ba3bffe9e51e12005--transcendent-cheesecake-03f934.netlify.app/api/scrape' \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer nfp_YfWhZCYLjYQatPEcpjDPB5WGRD8RRKaGec87' \
+  -H 'Authorization: Bearer <YOUR_NETLIFY_PAT>' \
   -d '{
     "jobs": [
       {"url": "https://example.com", "engine": "fetch"},
@@ -62,7 +62,7 @@ Response:
 ## Read the scraped result (blob retrieval)
 
 ```bash
-curl -H "Authorization: Bearer nfp_YfWhZCYLjYQatPEcpjDPB5WGRD8RRKaGec87" \
+curl -H "Authorization: Bearer <YOUR_NETLIFY_PAT>" \
   'https://api.netlify.com/api/v1/blobs/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/site:scraper-results/result/batch-1786755523361-btfjt0-0'
 ```
 
@@ -71,21 +71,21 @@ Returns: raw bytes of the scraped response body.
 ## Check batch status (without calling the function — free)
 
 ```bash
-curl -H "Authorization: Bearer nfp_YfWhZCYLjYQatPEcpjDPB5WGRD8RRKaGec87" \
+curl -H "Authorization: Bearer <YOUR_NETLIFY_PAT>" \
   'https://api.netlify.com/api/v1/blobs/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/site:scraper-results/status/batch-1786755523361-btfjt0'
 ```
 
 ## List all batches
 
 ```bash
-curl -H "Authorization: Bearer nfp_YfWhZCYLjYQatPEcpjDPB5WGRD8RRKaGec87" \
+curl -H "Authorization: Bearer <YOUR_NETLIFY_PAT>" \
   'https://api.netlify.com/api/v1/blobs/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/site:scraper-results?prefix=status/'
 ```
 
 ## List all result blobs
 
 ```bash
-curl -H "Authorization: Bearer nfp_YfWhZCYLjYQatPEcpjDPB5WGRD8RRKaGec87" \
+curl -H "Authorization: Bearer <YOUR_NETLIFY_PAT>" \
   'https://api.netlify.com/api/v1/blobs/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/site:scraper-results?prefix=result/'
 ```
 
@@ -95,7 +95,7 @@ curl -H "Authorization: Bearer nfp_YfWhZCYLjYQatPEcpjDPB5WGRD8RRKaGec87" \
 curl -X POST \
   'https://6a7fba0ba3bffe9e51e12005--transcendent-cheesecake-03f934.netlify.app/api/scrape' \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer nfp_YfWhZCYLjYQatPEcpjDPB5WGRD8RRKaGec87' \
+  -H 'Authorization: Bearer <YOUR_NETLIFY_PAT>' \
   -d '{
     "jobs": [
       {"url": "https://example.com", "engine": "puppeteer", "wait_for": {"type": "timeout", "ms": 2000}, "screenshot": true}
@@ -165,7 +165,7 @@ netlify deploy --message "process queue"
 
 ```
 API endpoint:    https://6a7fba0ba3bffe9e51e12005--transcendent-cheesecake-03f934.netlify.app/api/scrape
-Auth token:      nfp_YfWhZCYLjYQatPEcpjDPB5WGRD8RRKaGec87
+Auth token:      <YOUR_NETLIFY_PAT>
 Site ID:         01c2e47f-3ff6-4e09-b45f-604c49ef90fe
 Blob store:      scraper-results (API path: site:scraper-results)
 Blob API base:   https://api.netlify.com/api/v1/blobs/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/site:scraper-results

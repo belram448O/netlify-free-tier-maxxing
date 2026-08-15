@@ -97,7 +97,7 @@ Job options:
 Batch options:
   --delay-ms <ms>                Delay between jobs (default: 0)
   --concurrency <n>              Parallel jobs (default: 1, max 5 function / 10 build)
-  --result-mode <mode>           blob | inline | metadata (default: blob)
+  --result-mode <mode>           blob | inline | metadata | auto (default: blob)
   --queue                        Submit to build queue (for long-running, max 500 jobs)
 
 Puppeteer-only:

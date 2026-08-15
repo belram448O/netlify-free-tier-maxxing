@@ -68,7 +68,7 @@ Content-Type: application/json
 | `jobs` | array (required) | — | Array of job specs (1-50 sync, 1-500 queue) |
 | `delay_ms` | number | 0 | Delay between jobs (or chunks if concurrency > 1) |
 | `concurrency` | number | 1 | Parallel jobs. Max 5 in function mode, 10 in queue mode |
-| `result_mode` | string | `blob` | `blob` (store body, return key) \| `inline` (return body in response, capped at 32KB) \| `metadata` (discard body, return only headers) |
+| `result_mode` | string | `blob` | `blob` (store body, return key) \| `inline` (return body, ≤32KB) \| `metadata` (discard body, return only headers) \| `auto` (inline if ≤32KB, blob if larger) |
 | `queue` | boolean | false | If true, defer to build plugin for long-running processing |
 
 ## Response (batch sync mode)
