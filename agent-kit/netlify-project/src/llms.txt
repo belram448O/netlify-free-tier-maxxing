@@ -1,45 +1,33 @@
 # Scraper API — Live Service
 
-## Base URL
-```
-https://6a7fba0ba3bffe9e51e12005--transcendent-cheesecake-03f934.netlify.app
-```
-
 ## Auth
 All API requests require:
 ```
-Authorization: Bearer <YOUR_NETLIFY_PAT>
+Authorization: Bearer <SCRAPE_API_KEY>
 ```
+SCRAPE_API_KEY is set via `netlify env:set SCRAPE_API_KEY <key>`. Any shared secret works — NOT a Netlify PAT.
 
 ## Endpoints
+- POST /api/scrape — Submit batch scrape (sync or queue)
+- GET /api/status/{batchId} — Check batch status
+- GET /api/result/{batchId}/{index} — Get result metadata + blob URL (NOT bytes)
+- GET /api/result/{batchId}/{index}?passthrough=1 — Get raw bytes (costs bandwidth)
+- GET /api/list — List recent batches
+- POST /api/trigger-build — Trigger build to process queue
+- POST /api/resume — Resume incomplete batches
 
-### POST /api/scrape — Submit batch scrape
-```bash
-curl -X POST 'https://6a7fba0ba3bffe9e51e12005--transcendent-cheesecake-03f934.netlify.app/api/scrape' \
-  -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer <YOUR_NETLIFY_PAT>' \
-  -d '{"jobs":[{"url":"https://example.com","engine":"fetch"}],"result_mode":"blob"}'
-```
-
-### Blob reads (PAT required, NO function call needed)
-```
-Site ID: 01c2e47f-3ff6-4e09-b45f-604c49ef90fe
-Store:   site:scraper-results
-```
-
-Read result:
-```bash
-curl -H "Authorization: Bearer <YOUR_NETLIFY_PAT>" \
-  'https://api.netlify.com/api/v1/blobs/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/site:scraper-results/result/<batch_id>-<index>'
-```
-
-Read status:
-```bash
-curl -H "Authorization: Bearer <YOUR_NETLIFY_PAT>" \
-  'https://api.netlify.com/api/v1/blobs/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/site:scraper-results/status/<batch_id>'
-```
+## E2E flow (no CLI)
+1. POST /api/scrape (queue=true) → batch_id
+2. POST /api/trigger-build → deploy_id (forces build)
+3. GET /api/status/{batchId} → poll until complete
+4. GET /api/result/{batchId}/0 → blob_url
+5. GET {blob_url} with NETLIFY_PAT → raw bytes (free)
 
 ## Engines: fetch | chrome_impersonate | puppeteer
-## Modes: blob | inline | metadata | auto
+## TLS profiles: chrome120 (default) | firefox | safari | custom object
+## Result modes: blob (default) | inline | metadata | auto
 ## Limits: 50 jobs sync, 500 queue, 5 concurrency sync, 10 queue
-# updated 1786755801315754110
+
+## Env vars on function:
+- SCRAPE_API_KEY (optional — API auth)
+- NETLIFY_AUTH_TOKEN + SITE_ID (for trigger-build)

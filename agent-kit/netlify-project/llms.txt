@@ -1,119 +1,69 @@
 # Scraper API — Live Service Documentation
 
-> This documents a LIVE deployed scraper service on Netlify. Use these exact endpoints, tokens, and IDs.
+> This documents a LIVE deployed scraper service on Netlify.
 
-## Service endpoints (LIVE)
+## Authentication
 
-### Function URL (sync scraping — up to 25s)
+All API requests require the `SCRAPE_API_KEY` header:
 ```
-https://6a7fba0ba3bffe9e51e12005--transcendent-cheesecake-03f934.netlify.app/api/scrape
-```
-
-### Authentication (REQUIRED)
-All requests to `/api/scrape` must include:
-```
-Authorization: Bearer <YOUR_NETLIFY_PAT>
+Authorization: Bearer <SCRAPE_API_KEY>
 ```
 
-### Blob store (read results — requires same PAT)
-```
-Site ID: 01c2e47f-3ff6-4e09-b45f-604c49ef90fe
-Store:   scraper-results (in API: site:scraper-results)
-```
+`SCRAPE_API_KEY` is set via `netlify env:set SCRAPE_API_KEY <your-key>`. It can be any shared secret — NOT necessarily a Netlify PAT. The client calling the API never needs a Netlify PAT for the function endpoints.
 
-## Quick start — submit a scrape
+A Netlify PAT IS needed only for step 5 (fetching blob bytes directly via the Blobs API).
+
+## Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/scrape` | Submit batch scrape (sync or queue) |
+| GET | `/api/status/{batchId}` | Check batch status |
+| GET | `/api/result/{batchId}/{index}` | Get result metadata + blob URL (NOT bytes — saves bandwidth) |
+| GET | `/api/result/{batchId}/{index}?passthrough=1` | Get raw bytes (costs bandwidth — 20 cr/GB) |
+| GET | `/api/list[?status=...&limit=20]` | List recent batches |
+| POST | `/api/trigger-build` | Trigger build to process queue (requires NETLIFY_AUTH_TOKEN + SITE_ID env vars on function) |
+| POST | `/api/resume` | Resume incomplete batches (crash recovery) |
+
+## Full e2e flow (no CLI needed)
 
 ```bash
-curl -X POST \
-  'https://6a7fba0ba3bffe9e51e12005--transcendent-cheesecake-03f934.netlify.app/api/scrape' \
+# 1. Submit to queue
+curl -X POST 'https://<deploy-url>/api/scrape' \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer <YOUR_NETLIFY_PAT>' \
-  -d '{
-    "jobs": [
-      {"url": "https://example.com", "engine": "fetch"},
-      {"url": "https://tls.peet.ws/api/all", "engine": "chrome_impersonate"}
-    ],
-    "result_mode": "blob"
-  }'
+  -H 'Authorization: Bearer <SCRAPE_API_KEY>' \
+  -d '{"jobs":[{"url":"https://example.com","engine":"chrome_impersonate","tls_profile":"firefox"}],"queue":true}'
+# → {"batch_id":"batch-xxx","status":"pending"}
+
+# 2. Trigger build (function writes trigger file → forces Netlify to run build → plugin processes queue)
+curl -X POST 'https://<deploy-url>/api/trigger-build' \
+  -H 'Authorization: Bearer <SCRAPE_API_KEY>'
+# → {"ok":true,"deploy_id":"...","pending_count":1}
+
+# 3. Poll status (small JSON — no bandwidth cost)
+curl 'https://<deploy-url>/api/status/batch-xxx' \
+  -H 'Authorization: Bearer <SCRAPE_API_KEY>'
+# → {"batch_id":"batch-xxx","status":"complete","results":[...]}
+
+# 4. Get result metadata + blob URL (small JSON — NOT the bytes)
+curl 'https://<deploy-url>/api/result/batch-xxx/0' \
+  -H 'Authorization: Bearer <SCRAPE_API_KEY>'
+# → {"blob_url":"https://api.netlify.com/...","size":559,"content_type":"text/html"}
+
+# 5. Fetch actual data via blob URL (requires Netlify PAT — free, no bandwidth cost)
+curl 'https://api.netlify.com/api/v1/blobs/<site_id>/site:scraper-results/result/batch-xxx-0' \
+  -H 'Authorization: Bearer <NETLIFY_PAT>'
+# → raw bytes
 ```
 
-Response:
-```json
-{
-  "batch_id": "batch-1786755523361-btfjt0",
-  "status": "complete",
-  "succeeded": 2,
-  "failed": 0,
-  "elapsed_ms": 591,
-  "results": [
-    {
-      "index": 0,
-      "ok": true,
-      "status": 200,
-      "url": "https://example.com",
-      "engine": "fetch",
-      "size": 559,
-      "blob_key": "result/batch-1786755523361-btfjt0-0"
-    }
-  ]
-}
-```
-
-## Read the scraped result (blob retrieval)
+## Sync scrape (immediate, no queue)
 
 ```bash
-curl -H "Authorization: Bearer <YOUR_NETLIFY_PAT>" \
-  'https://api.netlify.com/api/v1/blobs/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/site:scraper-results/result/batch-1786755523361-btfjt0-0'
-```
-
-Returns: raw bytes of the scraped response body.
-
-## Check batch status (without calling the function — free)
-
-```bash
-curl -H "Authorization: Bearer <YOUR_NETLIFY_PAT>" \
-  'https://api.netlify.com/api/v1/blobs/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/site:scraper-results/status/batch-1786755523361-btfjt0'
-```
-
-## List all batches
-
-```bash
-curl -H "Authorization: Bearer <YOUR_NETLIFY_PAT>" \
-  'https://api.netlify.com/api/v1/blobs/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/site:scraper-results?prefix=status/'
-```
-
-## List all result blobs
-
-```bash
-curl -H "Authorization: Bearer <YOUR_NETLIFY_PAT>" \
-  'https://api.netlify.com/api/v1/blobs/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/site:scraper-results?prefix=result/'
-```
-
-## Submit to queue (for long-running / puppeteer jobs)
-
-```bash
-curl -X POST \
-  'https://6a7fba0ba3bffe9e51e12005--transcendent-cheesecake-03f934.netlify.app/api/scrape' \
+curl -X POST 'https://<deploy-url>/api/scrape' \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer <YOUR_NETLIFY_PAT>' \
-  -d '{
-    "jobs": [
-      {"url": "https://example.com", "engine": "puppeteer", "wait_for": {"type": "timeout", "ms": 2000}, "screenshot": true}
-    ],
-    "queue": true,
-    "result_mode": "blob"
-  }'
-```
-
-Response (HTTP 202):
-```json
-{"batch_id": "batch-xxx", "status": "pending", "job_count": 1}
-```
-
-Queue is processed when a build runs. To trigger a build:
-```bash
-cd /path/to/netlify-project
-netlify deploy --message "process queue"
+  -H 'Authorization: Bearer <SCRAPE_API_KEY>' \
+  -d '{"jobs":[{"url":"https://example.com","engine":"fetch"}],"result_mode":"blob"}'
+# → {"batch_id":"batch-xxx","status":"complete","results":[{"blob_key":"result/batch-xxx-0",...}]}
 ```
 
 ## Job spec
@@ -123,63 +73,66 @@ netlify deploy --message "process queue"
   "url": "https://example.com",
   "method": "GET",
   "headers": {"Authorization": "Bearer xxx"},
-  "body": null,
   "engine": "fetch",
+  "tls_profile": "chrome120",
   "timeout_ms": 25000,
-  "follow_redirects": true,
-  "user_agent": "Mozilla/5.0 ...",
-  "wait_for": null,
-  "actions": [],
-  "screenshot": false,
-  "screenshot_full": false
+  "result_mode": "blob"
 }
 ```
 
 ## Engines
 
-| Engine | Sync | Queue | JA3 | Notes |
-|---|---|---|---|---|
-| `fetch` | ✅ | ✅ | Node fingerprint | Fast, all methods |
-| `chrome_impersonate` | ✅ GET/HEAD | ✅ GET/HEAD | Chrome-like | Requires HTTPS |
-| `puppeteer` | ❌ | ✅ | Real Chrome | Supports wait_for, actions, screenshot |
+| Engine | Sync | Queue | Notes |
+|---|---|---|---|
+| `fetch` | ✅ | ✅ | Node fingerprint, all HTTP methods |
+| `chrome_impersonate` | ✅ GET/HEAD | ✅ GET/HEAD | Requires HTTPS, configurable TLS |
+| `puppeteer` | ❌ | ✅ | Real Chrome, supports wait_for/actions/screenshot |
+
+## TLS profiles (for chrome_impersonate engine)
+
+| Profile | JA3 hash |
+|---|---|
+| `chrome120` (default) | Chrome-like |
+| `firefox` | Firefox-like |
+| `safari` | Safari-like |
+| Custom object | Full control over ClientHello |
+
+Pass as `tls_profile` on the job:
+```json
+{"engine":"chrome_impersonate","tls_profile":"firefox"}
+```
 
 ## Result modes
 
 | Mode | Behavior | Cost |
 |---|---|---|
-| `blob` (default) | Stores body in blob, returns `blob_key` | 0 credits |
-| `inline` | Returns body in response (≤32KB) | bandwidth |
-| `metadata` | Discards body, returns headers only | ~0 |
+| `blob` (default) | Store body in blob, return `blob_key` | 0 credits |
+| `inline` | Return body in response (≤32KB) | bandwidth |
+| `metadata` | Discard body, return headers only | ~0 |
 | `auto` | Inline if ≤32KB, blob if larger | mixed |
 
-## Validation
+## Environment variables
 
-- URL must be http/https, no private IPs, no localhost
-- `chrome_impersonate` requires `https://`
-- `timeout_ms`: positive integer, max 25000 (sync) / 60000 (queue)
-- `concurrency`: positive integer, max 5 (sync) / 10 (queue)
-- `delay_ms`: non-negative integer, max 60000
-- Max jobs: 50 (sync) / 500 (queue)
+### On the function (set via `netlify env:set`):
 
-## Secrets for THIS deployment
+| Variable | Required | Description |
+|---|---|---|
+| `SCRAPE_API_KEY` | Optional | If set, all API requests require this key. Can be any shared secret. |
+| `NETLIFY_AUTH_TOKEN` | For trigger-build | Netlify PAT — used by function to create deploys with file content |
+| `SITE_ID` | For trigger-build | Netlify site ID — used by trigger-build to know which site to deploy |
+
+### For the client:
+
+| Variable | Required | Description |
+|---|---|---|
+| `SCRAPE_API_KEY` | If protection enabled | Sent as `Authorization: Bearer <key>` header |
+| `NETLIFY_AUTH_TOKEN` | Only for blob reads | Netlify PAT to fetch result bytes via Blobs API (step 5 above) |
+
+## Blob store
 
 ```
-API endpoint:    https://6a7fba0ba3bffe9e51e12005--transcendent-cheesecake-03f934.netlify.app/api/scrape
-Auth token:      <YOUR_NETLIFY_PAT>
-Site ID:         01c2e47f-3ff6-4e09-b45f-604c49ef90fe
-Blob store:      scraper-results (API path: site:scraper-results)
-Blob API base:   https://api.netlify.com/api/v1/blobs/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/site:scraper-results
+Store: scraper-results (API path: site:scraper-results)
+Blob URL pattern: https://api.netlify.com/api/v1/blobs/<site_id>/site:scraper-results/<key>
 ```
 
-## Netlify CLI (only needed for deploys + logs, NOT for blob reads)
-
-```bash
-# Install
-npm install -g netlify-cli
-
-# Read function logs (free, 24h retention)
-netlify logs --json --since 1h
-
-# Deploy (triggers build + queue processing)
-netlify deploy --message "deploy"
-```
+Blob reads require a Netlify PAT. The function's `/api/result` endpoint returns the blob URL so clients can fetch data directly (free — no bandwidth cost).
