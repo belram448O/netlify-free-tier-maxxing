@@ -6,10 +6,14 @@
 // session (cookies extracted from app.netlify.com) — NOT a PAT.
 //
 // Auth model:
-//   - The bb-api at app.netlify.com/access-control/bb-api/ uses session cookies
-//   - Key cookies: connect.sid (Express session), _nf-auth (JWT, starts with nfu_)
-//   - Extract from browser DevTools: Application → Cookies → app.netlify.com
-//   - Save ALL cookie key=value pairs into a file, one per line: "key=value"
+//   - The bb-api at app.netlify.com/access-control/bb-api/ uses the _nf-auth cookie
+//   - WAF test confirmed: NO WAF, NO browser headers needed, NO connect.sid needed
+//   - ONLY the _nf-auth cookie (value starts with nfu_) is required for auth
+//   - Plain curl with just "Cookie: _nf-auth=nfu_xxx" works for both GET and PUT
+//
+// Extract from browser:
+//   DevTools → Application → Cookies → app.netlify.com → find _nf-auth
+//   OR save as a file with one line: "_nf-auth=nfu_xxxxx"
 //
 // Usage:
 //   node tools/netlify-dashboard-api.mjs <command> [args]
@@ -461,9 +465,9 @@ Environment:
   Cookie file format:   "key=value" per line from browser DevTools
 
 Auth:
-  Requires session cookies from app.netlify.com (NOT a PAT).
-  Extract: browser DevTools → Application → Cookies → app.netlify.com
-  Required: connect.sid, _nf-auth (JWT starting with nfu_)`);
+  Requires ONLY the _nf-auth cookie from app.netlify.com (NOT a PAT, NOT a browser).
+  WAF tested: plain curl works with just "Cookie: _nf-auth=nfu_xxx".
+  Extract: browser DevTools → Application → Cookies → app.netlify.com → find _nf-auth`);
   process.exit(0);
 }
 

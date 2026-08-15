@@ -927,16 +927,19 @@ The `_nf-auth` JWT cookie expires (typically hours to days). To refresh without 
 
 ## Final Final Reminders (Updated)
 
-1. **Always `netlify deploy` (no `--prod`)** — preview deploys are free, function URLs work after SSO disable
-2. **Always `draft: true` when using the REST API** — production deploys cost 15 credits each
-3. **SSO disable is one-time per site** — use bb-api with session cookies, set `sso_login: false`
-4. **Build command phase has NO Blobs access** — write to `/tmp/`, plugin `onPostBuild` reads `/tmp/` and writes to Blobs
-5. **Function runtime has Blobs access** — `NETLIFY_BLOBS_CONTEXT` is auto-injected
-6. **Default `fetch()` in functions = bot fingerprint** — use `tls-impersonate` (pure JS, works) NOT `curl-cffi-node` (glibc 2.38 mismatch with Lambda)
-7. **Blobs API is free** — read/write any volume, 0 credits, no egress meter
-8. **Trust the dashboard for credit state** — API `credits.used` lags 5-30 minutes (sometimes >1 hour for bandwidth meter)
-9. **One Free team per Netlify user** — no per-org rotation
-10. **Build hooks need Git** — for API-triggered builds, use `POST /sites/{id}/deploys` with `draft:true` + PAT
+1. **⚠️ CRITICAL: Disable SSO (project visibility) FIRST** — new Netlify sites start private by default. Without disabling SSO, function URLs return 401. Use: `node tools/netlify-dashboard-api.mjs disable-sso <site_id>`. This is the #1 reason functions fail after deploy. See `docs/dashboard-automation.md` for details.
+2. **Always `netlify deploy` (no `--prod`)** — preview deploys are free, function URLs work after SSO disable
+3. **Always `draft: true` when using the REST API** — production deploys cost 15 credits each
+4. **SSO disable requires bb-api (cookie auth), NOT PAT** — the public API can't do it
+5. **bb-api has NO WAF** — plain curl with just `_nf-auth` cookie works. No browser/Playwright needed.
+6. **Build command phase has NO Blobs access** — write to `/tmp/`, plugin `onPostBuild` reads `/tmp/` and writes to Blobs
+7. **Function runtime has Blobs access** — `NETLIFY_BLOBS_CONTEXT` is auto-injected
+8. **Default `fetch()` in functions = bot fingerprint** — use `tls-impersonate` (pure JS, works) NOT `curl-cffi-node` (glibc 2.38 mismatch with Lambda)
+9. **Blobs API is free** — read/write any volume, 0 credits, no egress meter
+10. **Trust the dashboard for credit state** — API `credits.used` lags 5-30 minutes (sometimes >1 hour for bandwidth meter)
+11. **One Free team per Netlify user** — no per-org rotation
+12. **Build hooks need Git** — for API-triggered builds, use `netlify deploy` CLI (API deploys don't trigger builds)
+13. **Queue processing via `netlify deploy`** — API deploys (`POST /sites/{id}/deploys`) do NOT run the build process
 
 ---
 

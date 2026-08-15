@@ -3,6 +3,27 @@
 > **Load this file when you need to automate Netlify operations that the public API (PAT) cannot do.**
 > This covers the internal bb-api (Backend-For-Frontend) that the dashboard uses, accessible via session cookies.
 
+## ⚠️ CRITICAL: Project visibility gates function access
+
+**If project visibility is "private" (SSO enabled), your function URLs will return `HTTP 401` and redirect to `app.netlify.com/edge-access`. No client — including curl, other services, or your own code — can invoke the function.**
+
+This is the #1 reason functions fail after deploy. Check and fix it FIRST:
+
+```bash
+# Check current visibility
+node tools/netlify-dashboard-api.mjs get-site <site_id>
+# Look for: sso_login=true → BAD (functions blocked)
+# Look for: sso_login=false → GOOD (functions accessible)
+
+# Fix it (if sso_login=true)
+node tools/netlify-dashboard-api.mjs disable-sso <site_id>
+# Response should show: sso_login: false
+```
+
+After disabling SSO, ALL deploy URLs (preview AND production) become publicly accessible without login. New deploys inherit this setting automatically.
+
+**Why this matters:** New Netlify accounts (post-Aug 2026) have "Private by default" enabled. Every new site starts with SSO ON. Without disabling it, your function is deployed but unreachable. The PAT-based public API (`PATCH /api/v1/sites/{id}`) CANNOT disable SSO — it returns `null` for the `sso_login` field. Only the bb-api (cookie-auth) can do this.
+
 ## When to use this
 
 Use the dashboard automation tool when you need to:
@@ -23,19 +44,42 @@ Use the **public API** (PAT) for everything else:
 - List functions
 - Invoke functions
 
-## Auth model
+## Auth model — NO WAF, NO browser needed
 
-| API | Auth | Token type | How to get |
-|---|---|---|---|
-| Public API (`api.netlify.com/api/v1/`) | `Authorization: Bearer nfp_...` | PAT (Personal Access Token) | app.netlify.com → User settings → Applications |
-| bb-api (`app.netlify.com/access-control/bb-api/`) | Cookie header | Session cookies | Browser DevTools → Application → Cookies → app.netlify.com |
+### WAF test results (verified)
 
-**Key cookies for bb-api:**
-- `connect.sid` — Express session ID
-- `_nf-auth` — JWT (value starts with `nfu_`)
-- Both are required. Other cookies (analytics, tracking) are not needed.
+| Test | Headers sent | Result |
+|---|---|---|
+| Plain curl + Cookie only (no UA, no Origin, no Referer) | `Cookie: _nf-auth=nfu_...` | ✅ HTTP 200 — works |
+| Cookie + User-Agent (no Origin/Referer) | `Cookie` + `User-Agent` | ✅ HTTP 200 — works |
+| Full browser headers (Cookie + Origin + Referer + Sec-Fetch) | All browser headers | ✅ HTTP 200 — works |
+| No cookie at all | (none) | ❌ HTTP 401 "Access Denied" |
+| Only `connect.sid` (no `_nf-auth`) | `Cookie: connect.sid=...` | ❌ HTTP 401 "Access Denied" |
+| Only `_nf-auth` (no `connect.sid`) | `Cookie: _nf-auth=nfu_...` | ✅ HTTP 200 — **this is all you need** |
+| PUT (write) with plain curl | `Cookie` + `Content-Type` | ✅ HTTP 200 — writes work too |
 
-**Cookie expiration:** The `_nf-auth` JWT expires (typically hours to days). When it expires, re-extract from browser. No known API to refresh via PAT.
+**Conclusion: NO WAF, NO Playwright/browser required.** A plain `curl` with just the `_nf-auth` cookie works for both GET and PUT. The `_nf-auth` cookie alone (without `connect.sid` or any other cookies) is sufficient for authentication.
+
+### What you actually need
+
+```
+Cookie: _nf-auth=nfu_xxxxxxxxxxxxxxxxxxxxxxx
+```
+
+That's it. No `User-Agent`, no `Origin`, no `Referer`, no `Sec-Fetch-*` headers, no `connect.sid`.
+
+### Cookie extraction (simplified)
+
+Since only `_nf-auth` is needed:
+1. Open `https://app.netlify.com` → login
+2. DevTools → Application → Cookies → `app.netlify.com`
+3. Find `_nf-auth` → copy its value (starts with `nfu_`)
+4. Use in curl: `curl -H "Cookie: _nf-auth=nfu_xxx" https://app.netlify.com/access-control/bb-api/api/v1/...`
+
+Or save to file for the tool:
+```bash
+echo "_nf-auth=nfu_xxxxxxxxxxxxxxxxxxxxxxx" > /tmp/netlify-cookies.txt
+```
 
 ## Cookie extraction instructions
 
