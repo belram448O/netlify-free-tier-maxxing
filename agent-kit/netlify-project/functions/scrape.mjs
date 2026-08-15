@@ -43,6 +43,23 @@ async function fetchEngine(job) {
 }
 
 export default async function handler(req, context) {
+  // PAT protection — since blob reads require a PAT anyway, require it on the API too
+  // to prevent anonymous abuse of compute credits.
+  // Set SCRAPE_API_KEY env var in Netlify dashboard to enable. If not set, API is open.
+  // The key can be the same as your Netlify PAT (nfp_...) or a custom shared secret.
+  const apiKey = process.env.SCRAPE_API_KEY;
+  if (apiKey) {
+    const authHeader = req.headers.get('authorization') || '';
+    const xApiKey = req.headers.get('x-api-key') || '';
+    const providedKey = authHeader.replace(/^Bearer\s+/i, '') || xApiKey;
+    if (providedKey !== apiKey) {
+      return Response.json({
+        error: 'unauthorized',
+        hint: 'Provide your API key via Authorization: Bearer <key> or X-Api-Key: <key> header',
+      }, { status: 401 });
+    }
+  }
+
   if (req.method !== 'POST') {
     return Response.json({
       error: 'method not allowed',

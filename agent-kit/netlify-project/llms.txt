@@ -1,0 +1,405 @@
+# Netlify Free-Tier Scraper — API Documentation for AI Agents
+
+> This is an LLM-friendly API doc. If you're an AI agent, read this file to understand how to use the scraper service, retrieve results from Blobs, and manage queued jobs.
+
+## Service overview
+
+A batch HTTP scraper running on Netlify's free tier. Processes multiple URLs in a single function call, with three fetch engines (fetch, chrome_impersonate, puppeteer) and three result delivery modes (blob, inline, metadata).
+
+**Base URL:** `https://<deploy-id>--<site-name>.netlify.app`
+**API endpoint:** `POST /api/scrape`
+**Authentication:** Optional. Set `SCRAPE_API_KEY` env var in Netlify dashboard to require `Authorization: Bearer <key>` or `X-Api-Key: <key>` header on all requests.
+
+## Quick start
+
+### Submit a sync scrape (function processes inline, up to 25s)
+
+```bash
+curl -X POST 'https://<deploy-id>--<site>.netlify.app/api/scrape' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <SCRAPE_API_KEY>' \
+  -d '{
+    "jobs": [
+      {"url": "https://example.com", "engine": "fetch"},
+      {"url": "https://tls.peet.ws/api/all", "engine": "chrome_impersonate"}
+    ],
+    "result_mode": "blob"
+  }'
+```
+
+Response:
+```json
+{
+  "batch_id": "batch-1786749000-abc",
+  "status": "complete",
+  "processed": 2,
+  "succeeded": 2,
+  "failed": 0,
+  "skipped": 0,
+  "elapsed_ms": 591,
+  "results": [
+    {
+      "index": 0,
+      "ok": true,
+      "status": 200,
+      "url": "https://example.com",
+      "engine": "fetch",
+      "size": 559,
+      "blob_key": "result/batch-1786749000-abc-0",
+      "error": null
+    }
+  ]
+}
+```
+
+### Submit to queue (build plugin processes, up to 15 min)
+
+```bash
+curl -X POST 'https://<deploy-id>--<site>.netlify.app/api/scrape' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <SCRAPE_API_KEY>' \
+  -d '{
+    "jobs": [
+      {"url": "https://example.com", "engine": "puppeteer", "wait_for": {"type": "timeout", "ms": 2000}}
+    ],
+    "queue": true,
+    "result_mode": "blob"
+  }'
+```
+
+Response (HTTP 202):
+```json
+{
+  "batch_id": "batch-1786749000-def",
+  "status": "pending",
+  "job_count": 1
+}
+```
+
+## Retrieving results from Netlify Blobs
+
+### You need a Netlify PAT (Personal Access Token)
+
+All blob reads go through the Netlify REST API, which requires a PAT. The Netlify CLI is NOT required — you can use `curl`, `fetch`, or any HTTP client.
+
+**Get a PAT:** Go to https://app.netlify.com/user/settings/applications → Personal access tokens → New access token.
+
+**Required env vars for blob access:**
+```bash
+export NETLIFY_AUTH_TOKEN="nfp_your_token_here"
+export NETLIFY_SITE_ID="your-site-id-here"
+```
+
+### List all blobs in the scraper-results store
+
+```bash
+curl -s -H "Authorization: Bearer $NETLIFY_AUTH_TOKEN" \
+  "https://api.netlify.com/api/v1/blobs/$NETLIFY_SITE_ID/site:scraper-results"
+```
+
+Response:
+```json
+{
+  "blobs": [
+    {"key": "status/batch-1786749000-abc", "size": 232, "last_modified": "..."},
+    {"key": "result/batch-1786749000-abc-0", "size": 559, "last_modified": "..."},
+    {"key": "result/batch-1786749000-abc-1", "size": 4519, "last_modified": "..."}
+  ]
+}
+```
+
+### Read a specific result blob (the scraped content)
+
+```bash
+curl -s -H "Authorization: Bearer $NETLIFY_AUTH_TOKEN" \
+  "https://api.netlify.com/api/v1/blobs/$NETLIFY_SITE_ID/site:scraper-results/result/batch-1786749000-abc-0"
+```
+
+This returns the raw bytes of the scraped response body. The content-type is preserved in blob metadata.
+
+### Read batch status (without calling the function — zero compute cost)
+
+```bash
+curl -s -H "Authorization: Bearer $NETLIFY_AUTH_TOKEN" \
+  "https://api.netlify.com/api/v1/blobs/$NETLIFY_SITE_ID/site:scraper-results/status/batch-1786749000-abc"
+```
+
+Response:
+```json
+{
+  "batch_id": "batch-1786749000-abc",
+  "status": "complete",
+  "updated_at": "2026-08-14T23:19:18.756Z",
+  "job_count": 2,
+  "succeeded": 2,
+  "failed": 0,
+  "skipped": 0,
+  "elapsed_ms": 318,
+  "results": [
+    {
+      "index": 0,
+      "ok": true,
+      "status": 200,
+      "url": "https://example.com",
+      "engine": "fetch",
+      "size": 559,
+      "blob_key": "result/batch-1786749000-abc-0"
+    }
+  ]
+}
+```
+
+### Using the CLI tools (alternative to raw curl)
+
+The CLI tools wrap the blob API calls. They require the same env vars:
+
+```bash
+# List recent batches
+NETLIFY_AUTH_TOKEN=$TOKEN NETLIFY_SITE_ID=$SITE node cli/list.mjs
+
+# Check batch status
+NETLIFY_AUTH_TOKEN=$TOKEN NETLIFY_SITE_ID=$SITE node cli/status.mjs --batch-id batch-1786749000-abc
+
+# Wait for batch completion (polls with backoff)
+NETLIFY_AUTH_TOKEN=$TOKEN NETLIFY_SITE_ID=$SITE node cli/status.mjs --batch-id batch-1786749000-abc --wait
+
+# Retrieve a result
+NETLIFY_AUTH_TOKEN=$TOKEN NETLIFY_SITE_ID=$SITE node cli/result.mjs --batch-id batch-1786749000-abc --index 0 --output result.html
+
+# List all results in a batch
+NETLIFY_AUTH_TOKEN=$TOKEN NETLIFY_SITE_ID=$SITE node cli/result.mjs --batch-id batch-1786749000-abc --list
+```
+
+### Using the Netlify CLI (NOT required for blob reads)
+
+The Netlify CLI is only needed for:
+- Deploying the project (`netlify deploy`)
+- Reading function logs (`netlify logs --json`)
+
+You do NOT need the CLI to read blobs. The REST API with a PAT is sufficient.
+
+**Install the CLI:** `npm install -g netlify-cli`
+**Authenticate:** `netlify login` (browser) or set `NETLIFY_AUTH_TOKEN` env var
+
+### Do you need the Netlify CLI?
+
+| Task | CLI needed? | Alternative |
+|---|---|---|
+| Submit scrape job | No | `curl POST /api/scrape` |
+| Read result blob | No | `curl GET /api/v1/blobs/...` with PAT |
+| Read batch status | No | `curl GET /api/v1/blobs/.../status/...` with PAT |
+| Read function logs | Yes | `netlify logs --json --since 1h` |
+| Deploy the project | Yes | `netlify deploy` |
+| Trigger queue processing | Yes | `netlify deploy` (CLI runs build locally, triggers plugins) |
+
+## Blob key format
+
+All blobs are in the `scraper-results` store. Keys follow this pattern:
+
+| Key pattern | Content | When created |
+|---|---|---|
+| `status/{batch_id}` | JSON: batch status + per-job results summary | On every status transition |
+| `result/{batch_id}-{index}` | Raw bytes: scraped response body | When a job completes |
+| `screenshot/{batch_id}-{index}` | PNG: puppeteer screenshot | When `screenshot: true` in puppeteer job |
+| `queue/pending/{batch_id}` | JSON: original batch spec (jobs + options) | When `queue: true` is submitted |
+| `index/latest` | JSON: pointer to most recent batch | On every status update |
+
+**Important:** The store name in the REST API URL is `site:scraper-results` (with `site:` prefix). Example:
+```
+GET /api/v1/blobs/{site_id}/site:scraper-results/result/batch-1786749000-abc-0
+```
+
+## Triggering queue processing
+
+**CRITICAL:** Queue processing runs in the Netlify build plugin (`plugins/process-queue`), which only executes during a full build. There are two ways to trigger a build:
+
+### Method 1: Netlify CLI (recommended for cron)
+
+```bash
+# Triggers a full build locally (runs npm install, bundles functions, executes plugins)
+netlify deploy --message "process queue"
+```
+
+**Note:** API-triggered deploys (`POST /sites/{id}/deploys` with `draft:true`) do NOT trigger builds — they just upload files directly to the CDN. You MUST use `netlify deploy` CLI or Git push to trigger the build plugin.
+
+### Method 2: Git push (if site is Git-connected)
+
+```bash
+git commit --allow-empty -m "process queue"
+git push
+```
+
+Netlify will auto-trigger a build from the Git webhook.
+
+### Method 3: GitHub Actions cron (for scheduled processing)
+
+```yaml
+# .github/workflows/process-queue.yml
+name: Process download queue
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # every 15 min
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm install -g netlify-cli
+      - run: netlify deploy --message "scheduled queue processing"
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+```
+
+### Concurrency limits (stress-tested)
+
+| Limit | Value | Source |
+|---|---|---|
+| Concurrent builds (Free plan) | 1 | Documented |
+| Concurrent builds (Pro plan) | 5 | Documented |
+| API deploy rate limit | Not documented | No rate limit observed in testing |
+| Build duration (Free) | 15 min | Documented |
+| Function timeout (sync) | 30s (use 25s to be safe) | Lambda limit |
+| Build timeout (queue mode) | 14 min (1 min buffer) | Practical limit |
+
+**Stress test results:** Triggered 10 API deploys in rapid succession — all accepted (no rate limit), but API deploys with empty files (`draft:true` + `files:{}`) stay in `state=new` forever and never trigger a build. API deploys with files complete in ~1 second (direct CDN upload, no build process). Only `netlify deploy` CLI triggers the full build process (npm install + function bundling + plugin execution).
+
+## Job spec reference
+
+### Single job
+
+```json
+{
+  "url": "https://example.com",
+  "method": "GET",
+  "headers": {"Authorization": "Bearer xxx"},
+  "body": null,
+  "engine": "fetch",
+  "timeout_ms": 25000,
+  "follow_redirects": true,
+  "user_agent": "Mozilla/5.0 ...",
+  "wait_for": null,
+  "actions": [],
+  "screenshot": false,
+  "screenshot_full": false
+}
+```
+
+### Batch request
+
+```json
+{
+  "jobs": [<job>, ...],
+  "delay_ms": 0,
+  "concurrency": 1,
+  "result_mode": "blob",
+  "queue": false
+}
+```
+
+### Engines
+
+| Engine | Sync (function) | Queue (build) | JA3 hash | Notes |
+|---|---|---|---|---|
+| `fetch` | ✅ | ✅ | `1808993...` (Node) | Fast, all HTTP methods |
+| `chrome_impersonate` | ✅ (GET/HEAD only) | ✅ (GET/HEAD only) | `947eccbc...` (Chrome-like) | Requires HTTPS URLs |
+| `puppeteer` | ❌ | ✅ | Real Chrome | Supports `wait_for`, `actions`, `screenshot` |
+
+### Result modes
+
+| Mode | Behavior | Cost | When to use |
+|---|---|---|---|
+| `blob` (default) | Stores body in blob, returns `blob_key` | 0 credits | Large responses, persistent storage |
+| `inline` | Returns body in response JSON (capped at 32KB) | Bandwidth (20 cr/GB) | Small responses, immediate use |
+| `metadata` | Discards body, returns only headers + TLS info | ~0 | HEAD-like inspection, JA3 verification |
+| `auto` | Inline if ≤32KB, blob if larger | Mixed | Best of both worlds |
+
+### Validation rules
+
+| Field | Constraint |
+|---|---|
+| `url` | Must be http/https, no private IPs (IPv4 or IPv6), no localhost |
+| `engine` | One of: fetch, chrome_impersonate, puppeteer (defaults to `fetch`) |
+| `method` | For `chrome_impersonate`: only GET or HEAD |
+| `timeout_ms` | Positive integer. Max 25000 in function mode, 60000 in queue mode |
+| `concurrency` | Positive integer. Max 5 in function mode, 10 in queue mode |
+| `delay_ms` | Non-negative integer. Max 60000 |
+| `result_mode` | One of: blob, inline, metadata, auto |
+| `queue` | Boolean. If true, max 500 jobs; if false, max 50 jobs |
+| `chrome_impersonate` + `url` | URL must start with `https://` |
+
+## Error responses
+
+### 400 Bad Request
+```json
+{"error": "job 0 URL validation failed: URL points to private IP: 169.254.169.254"}
+```
+
+### 401 Unauthorized
+```json
+{"error": "unauthorized", "hint": "Provide your API key via Authorization: Bearer <key> or X-Api-Key: <key> header"}
+```
+
+### 413 Too Many Jobs
+```json
+{"error": "too many jobs (51). Max 50 in sync mode."}
+```
+
+### 502 Bad Gateway
+```json
+{"error": "Request timeout", "target_url": "https://slow-site.com", "elapsed_ms": 25000}
+```
+
+## Security
+
+- **SSRF protection:** URLs validated against private IP ranges (IPv4: 10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, 0/8, 100.64/10; IPv6: fc00::/7, fe80::/10, ::ffff:x.x.x.x mapped, 2001:db8::/32)
+- **URL redaction:** Query strings redacted in logs and blob metadata
+- **Optional API key:** Set `SCRAPE_API_KEY` env var to require authentication on the `/api/scrape` endpoint
+- **Blob access:** Always requires Netlify PAT (cannot be disabled)
+
+## Cost model
+
+| Action | Credits |
+|---|---|
+| Preview deploy | 0 |
+| Function invocation (200ms avg) | ~0.0006 |
+| Blob write | 0 |
+| Blob read | 0 |
+| Function ingress (download from target) | 0 |
+| Function egress (response to client, small JSON) | ~0.0001 |
+| Production deploy | 15 (avoid) |
+
+**Daily free-tier capacity:** ~18,000 function invocations + unlimited blob storage + 15 min build compute per deploy
+
+## Environment variables
+
+### For the function (set in Netlify dashboard → Site settings → Environment variables)
+
+| Variable | Required | Description |
+|---|---|---|
+| `SCRAPE_API_KEY` | Optional | If set, all `/api/scrape` requests must include this key via `Authorization: Bearer <key>` or `X-Api-Key: <key>` header. Can be the same as your Netlify PAT. |
+| `NETLIFY_BLOBS_CONTEXT` | Auto-injected | Set automatically by Netlify runtime — do not set manually |
+
+### For the CLI / client (set in your shell or CI)
+
+| Variable | Required | Description |
+|---|---|---|
+| `NETLIFY_AUTH_TOKEN` | Yes (for blob reads) | Netlify PAT (`nfp_...`) — needed to read blobs and status |
+| `NETLIFY_SITE_ID` | Yes (for blob reads) | Site ID from Netlify dashboard |
+| `NETLIFY_SITE_URL` | Yes (for CLI submit) | Base URL of the deployed function (e.g., `https://<deploy-id>--<site>.netlify.app`) |
+| `SCRAPE_API_KEY` | If protection enabled | Same value as set in the function's env var |
+
+## File structure
+
+```
+netlify-project/
+├── PROTOCOL.md               # Full protocol spec
+├── netlify.toml               # Build config
+├── package.json              # Root deps (@netlify/blobs, tls-impersonate, chromium, puppeteer-core)
+├── lib/scraper.mjs           # Shared library (validation, engines, batch logic)
+├── functions/scrape.mjs      # Main function — POST /api/scrape
+├── plugins/process-queue/   # Build plugin — processes queued batches
+├── plugins/store-data/      # Build plugin — stores /tmp output to Blobs
+├── cli/                      # CLI tools (submit, status, result, list)
+├── scripts/                  # Helper scripts (trigger-deploy, list-blobs, read-blob, disable-sso)
+└── src/                      # Static site stub + batch scraper build command
+```

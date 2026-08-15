@@ -4,19 +4,9 @@
   functions = "functions"
 
 [functions]
-  # zisi = zip-it-and-ship-it — preserves native binaries and node_modules
-  # esbuild would strip native binaries and external modules
   node_bundler = "zisi"
-
-  # External modules — keep these as separate node_modules in the Lambda bundle
-  # (required for ESM-only packages like tls-impersonate)
   external_node_modules = ["tls-impersonate"]
-
-  # Include the functions/node_modules directory + shared lib in the Lambda bundle
   included_files = ["functions/node_modules/**", "lib/**"]
 
-# Build plugin: processes the batch scrape queue (for long-running jobs)
-# Runs in onPostBuild, has NETLIFY_BLOBS_CONTEXT, can run up to 15 min
-# Triggered on every deploy (including preview deploys triggered by GitHub Actions cron)
 [[plugins]]
   package = "./plugins/process-queue"

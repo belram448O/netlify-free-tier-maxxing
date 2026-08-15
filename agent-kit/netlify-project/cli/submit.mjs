@@ -175,7 +175,10 @@ async function main() {
 
   const r = await fetch(`${baseUrl}/api/scrape`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(process.env.SCRAPE_API_KEY ? { 'Authorization': `Bearer ${process.env.SCRAPE_API_KEY}` } : {}),
+    },
     body: JSON.stringify(batchRequest),
   });
 
