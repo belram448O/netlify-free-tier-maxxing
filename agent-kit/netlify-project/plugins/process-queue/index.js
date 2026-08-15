@@ -1,326 +1,365 @@
-// Build Plugin: Process Queue
+// Queue processor build plugin — processes long-running batch jobs
 //
-// Runs in onPostBuild (which has NETLIFY_BLOBS_CONTEXT — build.command does not).
-// Reads pending download jobs from the queue, downloads each, stores results.
-//
-// Why a build plugin (not a function):
-//   - Functions cap at 30s sync / 15 min background
-//   - Build process runs up to 15 min, can handle larger downloads in one shot
-//   - 1 concurrent build on Free plan = serialized queue processing (no race conditions)
-//
-// Concurrency:
-//   - Only ONE build can run at a time on Free plan, so no distributed locking needed
-//   - Each job is marked "downloading" before download starts (so re-runs skip it)
-//   - If a build crashes mid-download, the job stays in "downloading" state —
-//     we should add a TTL check to requeue stale "downloading" jobs
+// Uses shared lib at ../../lib/scraper.mjs for common logic.
+// Adds puppeteer engine support (build-only).
 
-import tls from 'node:tls';
+import {
+  BUILD_TIMEOUT_MS, PER_JOB_TIMEOUT_MS_DEFAULT, MAX_CONCURRENCY_BUILD,
+  STALE_RUNNING_MS, DEFAULT_TIMEOUT_MS,
+  validateUrl, safeUrlForLog,
+  getStore, setBatchStatus, dequeueBatch, enqueueBatch,
+  fetchWithUndici, fetchWithTlsImpersonate, processBatch, computeBatchStatus,
+  resultsSummary, withTimeout, storeResult,
+} from '../../lib/scraper.mjs';
 
-const STORE_NAME = 'download-jobs';
-const BUILD_TIMEOUT_MS = 14 * 60 * 1000; // 14 min (leave 1 min buffer under 15 min cap)
-const PER_JOB_TIMEOUT_MS = 60_000; // 60s per job by default
-const MAX_JOBS_PER_BUILD = 50;
-const STALE_DOWNLOADING_MS = 10 * 60 * 1000; // requeue if "downloading" > 10 min
+// === Puppeteer engine (build-only) ===
 
-// Chrome 120 ClientHello spec (same as functions/download.mjs)
-const CHROME_120_SPEC = {
-  cipherSuites: [0x1301, 0x1302, 0x1303, 0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca9, 0xcca8, 0xc013, 0xc014, 0x009c, 0x009d, 0x002f, 0x0035],
-  extensions: [
-    { type: 0x0016 }, { type: 0x000b }, { type: 0xff01 }, { type: 0x0000 },
-    { type: 0x0017 }, { type: 0x000d }, { type: 0x000a }, { type: 0x0023 },
-    { type: 0x0010, alpnProtocols: ['h2', 'http/1.1'] }, { type: 0x002b },
-    { type: 0x002d }, { type: 0x0033 }, { type: 0x001c }, { type: 0x0015 },
-  ],
-  supportedGroups: [0x001d, 0x0017, 0x0018],
-  signatureAlgorithms: [0x0403, 0x0804, 0x0401, 0x0503, 0x0501, 0x0803, 0x0601, 0x0201],
-  alpnProtocols: ['h2', 'http/1.1'],
-};
+let puppeteerCache = null;
 
-let tlsImpersonate = null;
-async function getTlsImpersonate() {
-  if (tlsImpersonate !== null) return tlsImpersonate;
+async function getPuppeteer() {
+  if (puppeteerCache !== null) return puppeteerCache;
+  let chromium, puppeteer;
   try {
-    tlsImpersonate = await import('tls-impersonate');
-  } catch (e) {
-    console.log(`  tls-impersonate not available: ${e.message}`);
-    tlsImpersonate = false;
-  }
-  return tlsImpersonate;
-}
-
-async function getStore() {
-  const { getStore: getStoreFn } = await import('@netlify/blobs');
-  return getStoreFn(STORE_NAME);
-}
-
-async function setStatus(jobId, status, extra = {}) {
-  const store = await getStore();
-  const statusObj = {
-    ...extra,
-    job_id: jobId,
-    status,
-    updated_at: new Date().toISOString(),
-  };
-  await store.setJSON(`status/${jobId}`, statusObj);
-  await store.setJSON('index/latest', { job_id: jobId, status, updated_at: statusObj.updated_at });
-  return statusObj;
-}
-
-async function getStatus(jobId) {
-  const store = await getStore();
-  try {
-    return await store.get(`status/${jobId}`, { type: 'json' });
+    chromium = (await import('@sparticuz/chromium')).default;
   } catch {
-    return null;
+    throw new Error('@sparticuz/chromium not installed. Add it to the root package.json dependencies: npm install @sparticuz/chromium puppeteer-core');
+  }
+  try {
+    puppeteer = (await import('puppeteer-core')).default;
+  } catch {
+    throw new Error('puppeteer-core not installed. Add it to the root package.json dependencies.');
+  }
+  puppeteerCache = { chromium, puppeteer };
+  return puppeteerCache;
+}
+
+async function fetchWithPuppeteer(job, timeoutMs) {
+  const { chromium, puppeteer } = await getPuppeteer();
+  const browser = await puppeteer.launch({
+    args: chromium.args,
+    defaultViewport: chromium.defaultViewport,
+    executablePath: await chromium.executablePath(),
+    headless: chromium.headless,
+  });
+
+  try {
+    const page = await browser.newPage();
+    page.setDefaultTimeout(timeoutMs);
+    page.setDefaultNavigationTimeout(timeoutMs);
+
+    if (job.user_agent) await page.setUserAgent(job.user_agent);
+    if (job.headers) await page.setExtraHTTPHeaders(job.headers);
+
+    // Capture HTTPResponse to get real status
+    const response = await withTimeout(
+      page.goto(job.url, { timeout: timeoutMs, waitUntil: 'domcontentloaded' }),
+      timeoutMs,
+      'page.goto timeout'
+    );
+    const upstreamStatus = response?.status() ?? 0;
+    const upstreamOk = response?.ok() ?? false;
+
+    // Wait for selector or timeout
+    if (job.wait_for) {
+      if (typeof job.wait_for === 'string') {
+        await withTimeout(page.waitForSelector(job.wait_for), timeoutMs, 'wait_for selector timeout');
+      } else if (job.wait_for.type === 'timeout') {
+        const ms = Math.min(job.wait_for.ms || 1000, timeoutMs);
+        await new Promise(r => setTimeout(r, ms));
+      } else if (job.wait_for.type === 'selector') {
+        await withTimeout(page.waitForSelector(job.wait_for.selector), timeoutMs, 'wait_for selector timeout');
+      } else if (job.wait_for.type === 'networkidle') {
+        await withTimeout(page.waitForNetworkIdle(), timeoutMs, 'wait_for networkidle timeout');
+      }
+    }
+
+    // Execute actions (all wrapped in timeout)
+    if (Array.isArray(job.actions)) {
+      for (const action of job.actions) {
+        if (action.type === 'click') {
+          await withTimeout(page.click(action.selector), timeoutMs, `click ${action.selector} timeout`);
+        } else if (action.type === 'wait') {
+          const ms = Math.min(action.ms || 500, timeoutMs);
+          await new Promise(r => setTimeout(r, ms));
+        } else if (action.type === 'type') {
+          await withTimeout(page.type(action.selector, action.text || ''), timeoutMs, `type ${action.selector} timeout`);
+        } else if (action.type === 'scroll') {
+          await withTimeout(page.evaluate((x, y) => window.scrollBy(x, y), action.x || 0, action.y || 1000), timeoutMs, 'scroll timeout');
+        } else if (action.type === 'wait_for_selector') {
+          await withTimeout(page.waitForSelector(action.selector), timeoutMs, `wait_for_selector ${action.selector} timeout`);
+        }
+      }
+    }
+
+    // Get final HTML and metadata
+    const html = await withTimeout(page.content(), timeoutMs, 'page.content() timeout');
+    const finalUrl = page.url();
+    const title = await withTimeout(page.title(), timeoutMs, 'page.title() timeout').catch(() => null);
+
+    // Capture screenshot if requested — store as separate blob
+    let screenshotBlobKey = null;
+    let screenshotBytes = 0;
+    if (job.screenshot) {
+      const screenshot = await withTimeout(
+        page.screenshot({ type: 'png', fullPage: !!job.screenshot_full }),
+        timeoutMs,
+        'screenshot timeout'
+      ).catch(() => null);
+      if (screenshot) {
+        screenshotBytes = screenshot.length;
+        // Store screenshot as a separate blob (with .png suffix for easy retrieval)
+        const screenshotKey = `screenshot/${job._batch_id}-${job._index}`;
+        const store = await getStore();
+        await store.set(screenshotKey, screenshot, {
+          metadata: {
+            content_type: 'image/png',
+            size: String(screenshotBytes),
+            stored_at: new Date().toISOString(),
+            url: safeUrlForLog(job.url),
+          },
+        });
+        screenshotBlobKey = screenshotKey;
+      }
+    }
+
+    return {
+      ok: upstreamOk,
+      status: upstreamStatus,
+      body: Buffer.from(html, 'utf8'),
+      content_type: 'text/html',
+      headers: {},
+      redirected: finalUrl !== job.url,
+      final_url: finalUrl,
+      puppeteer: {
+        title,
+        screenshot_bytes: screenshotBytes,
+        screenshot_blob_key: screenshotBlobKey,
+      },
+    };
+  } finally {
+    await browser.close().catch(() => {});
   }
 }
 
-async function setResult(jobId, body, contentType, metadata = {}) {
-  const store = await getStore();
-  await store.set(`result/${jobId}`, body, {
-    metadata: {
-      content_type: contentType,
-      size: String(body.length),
-      stored_at: new Date().toISOString(),
-      ...metadata,
-    },
-  });
+// === Engine dispatcher (build mode — supports all 3 engines) ===
+
+let tlsImpersonateModule = null;
+async function getTlsImpersonate() {
+  if (tlsImpersonateModule !== null) return tlsImpersonateModule;
+  try {
+    tlsImpersonateModule = await import('tls-impersonate');
+  } catch (e) {
+    tlsImpersonateModule = false;
+  }
+  return tlsImpersonateModule;
 }
 
-async function dequeueJob(jobId) {
-  const store = await getStore();
-  await store.delete(`queue/pending/${jobId}`);
+async function fetchEngine(job) {
+  const engine = job.engine || 'fetch';
+  const timeoutMs = Math.min(job.timeout_ms || PER_JOB_TIMEOUT_MS_DEFAULT, PER_JOB_TIMEOUT_MS_DEFAULT);
+
+  if (engine === 'fetch') {
+    return fetchWithUndici(job, timeoutMs);
+  }
+  if (engine === 'chrome_impersonate') {
+    const imp = await getTlsImpersonate();
+    if (!imp) throw new Error('tls-impersonate not available');
+    return fetchWithTlsImpersonate(job, timeoutMs, imp);
+  }
+  if (engine === 'puppeteer') {
+    return fetchWithPuppeteer(job, timeoutMs);
+  }
+  throw new Error(`unknown engine: ${engine}`);
 }
 
-async function listPendingJobs() {
+// === List and partition batches ===
+
+async function listAndPartitionBatches() {
   const store = await getStore();
-  const list = await store.list();
-  const queueKeys = (list.blobs || []).filter(b => b.key.startsWith('queue/pending/'));
-  const jobs = [];
-  for (const k of queueKeys) {
+  // Use prefix-scoped list calls to avoid fetching all blobs
+  const [pendingList, statusList] = await Promise.all([
+    store.list({ prefix: 'queue/pending/' }),
+    store.list({ prefix: 'status/' }),
+  ]);
+  const pendingBatches = [];
+  for (const b of (pendingList.blobs || [])) {
     try {
-      const spec = await store.get(k.key, { type: 'json' });
-      if (spec) jobs.push({ spec, key: k.key });
+      const spec = await store.get(b.key, { type: 'json' });
+      if (spec) pendingBatches.push({ spec, key: b.key });
     } catch {}
   }
-  // Sort by created_at ascending (oldest first)
-  jobs.sort((a, b) => (a.spec.created_at || '').localeCompare(b.spec.created_at || ''));
-  return jobs;
-}
-
-async function listStaleDownloadingJobs() {
-  const store = await getStore();
-  const list = await store.list();
-  const statusKeys = (list.blobs || []).filter(b => b.key.startsWith('status/'));
-  const stale = [];
+  const staleRunning = [];
   const now = Date.now();
-  for (const k of statusKeys) {
+  for (const b of (statusList.blobs || [])) {
+    if (!b.last_modified) continue;
     try {
-      const s = await store.get(k.key, { type: 'json' });
-      if (s && s.status === 'downloading' && s.updated_at) {
+      const s = await store.get(b.key, { type: 'json' });
+      if (s && s.status === 'running' && s.updated_at) {
         const updatedMs = new Date(s.updated_at).getTime();
-        if (now - updatedMs > STALE_DOWNLOADING_MS) {
-          stale.push(s);
+        if (now - updatedMs > STALE_RUNNING_MS) {
+          staleRunning.push({ status: s, key: b.key });
         }
       }
     } catch {}
   }
-  return stale;
+  pendingBatches.sort((a, b) => (a.spec.created_at || '').localeCompare(b.spec.created_at || ''));
+  return { pendingBatches, staleRunning };
 }
 
-// === Download implementation (mirror of functions/download.mjs) ===
+// === Process batch (wraps shared processBatch with build-specific status) ===
 
-async function downloadUrl(targetUrl, method, userAgent, timeoutMs = PER_JOB_TIMEOUT_MS) {
-  if (method === 'chrome_impersonate') {
-    const imp = await getTlsImpersonate();
-    if (!imp || !imp.isSupported()) {
-      throw new Error('chrome_impersonate requested but tls-impersonate not available');
-    }
-    return downloadWithTlsImpersonate(targetUrl, userAgent, timeoutMs, imp);
-  }
-  // Default: undici fetch
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error('Download timeout')), timeoutMs);
-  try {
-    const r = await fetch(targetUrl, {
-      headers: { 'User-Agent': userAgent, 'Accept': '*/*' },
-      redirect: 'follow',
-      signal: controller.signal,
-    });
-    const buf = Buffer.from(await r.arrayBuffer());
-    return {
-      status: r.status,
-      body: buf,
-      content_type: r.headers.get('content-type') || 'application/octet-stream',
-      headers: Object.fromEntries(r.headers.entries()),
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
+async function processBatchBuild(batchSpec, buildStartMs) {
+  const { batch_id, jobs, options } = batchSpec;
+  const batchStartMs = Date.now();
 
-async function downloadWithTlsImpersonate(targetUrl, userAgent, timeoutMs, imp) {
-  const { tlsOptions } = imp.impersonate(CHROME_120_SPEC);
-  const url = new URL(targetUrl);
-  const tlsSocket = tls.connect({
-    host: url.hostname,
-    port: parseInt(url.port || '443'),
-    servername: url.hostname,
-    ...tlsOptions,
+  await setBatchStatus(batch_id, 'running', {
+    job_count: jobs.length,
+    options,
+    started_at: new Date().toISOString(),
   });
-  const timeout = setTimeout(() => tlsSocket.destroy(new Error('TLS timeout')), timeoutMs);
-  try {
-    await new Promise((resolve, reject) => {
-      tlsSocket.once('secureConnect', resolve);
-      tlsSocket.once('error', reject);
-    });
-    const path = (url.pathname || '/') + (url.search || '');
-    tlsSocket.write(
-      `GET ${path} HTTP/1.1\r\nHost: ${url.hostname}\r\nUser-Agent: ${userAgent}\r\nAccept: */*\r\nConnection: close\r\n\r\n`
-    );
-    const chunks = [];
-    await new Promise((resolve) => {
-      tlsSocket.on('data', (c) => chunks.push(c));
-      tlsSocket.on('end', resolve);
-      tlsSocket.on('close', resolve);
-      tlsSocket.on('error', resolve);
-    });
-    const raw = Buffer.concat(chunks).toString('utf8');
-    const headerEnd = raw.indexOf('\r\n\r\n');
-    const rawHeaders = headerEnd >= 0 ? raw.substring(0, headerEnd) : '';
-    const body = headerEnd >= 0 ? raw.substring(headerEnd + 4) : raw;
-    const status = parseInt(rawHeaders.match(/^HTTP\/[\d.]+ (\d+)/)?.[1] || '0');
-    const ctMatch = rawHeaders.match(/^content-type:\s*(.+)$/im);
-    return {
-      status,
-      body: Buffer.from(body, 'utf8'),
-      content_type: ctMatch ? ctMatch[1].trim() : 'application/octet-stream',
-      headers: {},
+  console.log(`BATCH_START batch_id=${batch_id} jobs=${jobs.length} concurrency=${options.concurrency || 1} result_mode=${options.result_mode || 'blob'}`);
+
+  // Inject _batch_id and _index into each job so puppeteer can use them for screenshot keys
+  jobs.forEach((job, i) => {
+    job._batch_id = batch_id;
+    job._index = i;
+  });
+
+  const results = await processBatch(
+    batch_id, jobs, options,
+    buildStartMs, BUILD_TIMEOUT_MS, MAX_CONCURRENCY_BUILD, fetchEngine
+  );
+
+  const elapsedMs = Date.now() - batchStartMs;
+  const { succeeded, failed, skipped, status } = computeBatchStatus(results);
+
+  // If we have skipped jobs (timeout), re-enqueue them as a new batch
+  let requeuedCount = 0;
+  const skippedJobs = results
+    .filter(r => r.error?.startsWith('skipped'))
+    .map(r => jobs[r.index]);
+  if (skippedJobs.length > 0 && skippedJobs.length < jobs.length) {
+    // Some jobs skipped — create a new batch for them
+    const newBatchId = `batch-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+    const newSpec = {
+      batch_id: newBatchId,
+      jobs: skippedJobs,
+      options,
+      created_at: new Date().toISOString(),
+      requeued_from: batch_id,
     };
-  } finally {
-    clearTimeout(timeout);
-    tlsSocket.destroy();
-  }
-}
-
-// === Job processor ===
-
-async function processJob(jobSpec) {
-  const { job_id, target_url, method, user_agent, timeout_ms } = jobSpec;
-  const timeoutMs = Math.min(timeout_ms || PER_JOB_TIMEOUT_MS, PER_JOB_TIMEOUT_MS);
-
-  // Mark as downloading
-  await setStatus(job_id, 'downloading', { ...jobSpec, started_at: new Date().toISOString() });
-  console.log(`JOB_START job_id=${job_id} url=${target_url} method=${method}`);
-
-  try {
-    const downloadStart = Date.now();
-    const result = await downloadUrl(target_url, method, user_agent, timeoutMs);
-    const downloadMs = Date.now() - downloadStart;
-
-    // Store result
-    await setResult(job_id, result.body, result.content_type, {
-      target_url,
-      method,
-      upstream_status: String(result.status),
-    });
-
-    // Mark complete + dequeue
-    await setStatus(job_id, 'complete', {
-      ...jobSpec,
-      download_ms: downloadMs,
-      size: result.body.length,
-      content_type: result.content_type,
-      upstream_status: result.status,
-      completed_at: new Date().toISOString(),
-      result_blob_key: `result/${job_id}`,
-    });
-    await dequeueJob(job_id);
-
-    console.log(`JOB_COMPLETE job_id=${job_id} status=${result.status} size=${result.body.length} ms=${downloadMs}`);
-    return { ok: true, job_id, size: result.body.length, ms: downloadMs };
-
-  } catch (e) {
-    // Mark as error (keep in queue for retry — but with attempts counter)
-    const attempts = (jobSpec.attempts || 0) + 1;
-    const shouldRetry = attempts < 3; // max 3 attempts
-    const newStatus = shouldRetry ? 'pending' : 'error';
-
-    await setStatus(job_id, newStatus, {
-      ...jobSpec,
-      attempts,
-      error: e.message,
-      last_attempt_at: new Date().toISOString(),
-    });
-
-    if (shouldRetry) {
-      // Re-queue with incremented attempts
-      const store = await getStore();
-      await store.setJSON(`queue/pending/${job_id}`, { ...jobSpec, attempts });
-      console.log(`JOB_RETRY job_id=${job_id} attempt=${attempts} error=${e.message}`);
-    } else {
-      // Final failure — dequeue
-      await dequeueJob(job_id);
-      console.error(`JOB_ERROR job_id=${job_id} attempts=${attempts} error=${e.message}`);
+    try {
+      await enqueueBatch(newBatchId, newSpec);
+      await setBatchStatus(newBatchId, 'pending', {
+        job_count: skippedJobs.length,
+        options,
+        created_at: newSpec.created_at,
+        requeued_from: batch_id,
+      });
+      requeuedCount = skippedJobs.length;
+      console.log(`BATCH_REQUEUE batch_id=${newBatchId} jobs=${skippedJobs.length} from=${batch_id}`);
+    } catch (e) {
+      console.error(`Failed to requeue ${skippedJobs.length} skipped jobs: ${e.message}`);
     }
-    return { ok: false, job_id, error: e.message };
   }
+
+  // Dequeue BEFORE writing terminal status — so if build crashes between,
+  // the batch is re-processed (idempotent — overwrites existing results)
+  await dequeueBatch(batch_id);
+
+  await setBatchStatus(batch_id, status, {
+    job_count: jobs.length,
+    succeeded,
+    failed,
+    skipped,
+    requeued: requeuedCount,
+    elapsed_ms: elapsedMs,
+    completed_at: new Date().toISOString(),
+    options,
+    results: resultsSummary(results),
+  });
+
+  console.log(`BATCH_COMPLETE batch_id=${batch_id} status=${status} succeeded=${succeeded} failed=${failed} skipped=${skipped} requeued=${requeuedCount} ms=${elapsedMs}`);
+  return { batch_id, status, succeeded, failed, skipped, requeued: requeuedCount };
 }
 
 // === Plugin entry point ===
 
 export default {
-  onPostBuild: async ({ utils }) => {
+  onPostBuild: async () => {
     const buildStart = Date.now();
     console.log(`\n========== PROCESS_QUEUE_PLUGIN started ${new Date().toISOString()} ==========`);
 
-    // Step 1: Requeue stale "downloading" jobs (from crashed builds)
-    const staleJobs = await listStaleDownloadingJobs();
-    if (staleJobs.length > 0) {
-      console.log(`\n  Found ${staleJobs.length} stale "downloading" jobs (will requeue):`);
-      for (const s of staleJobs) {
-        const store = await getStore();
-        await store.setJSON(`queue/pending/${s.job_id}`, {
-          ...s,
-          attempts: (s.attempts || 0) + 1,
-          requeued_at: new Date().toISOString(),
-        });
-        await setStatus(s.job_id, 'pending', { ...s, requeued_at: new Date().toISOString() });
-        console.log(`    - ${s.job_id} (stale since ${s.updated_at})`);
+    const { pendingBatches, staleRunning } = await listAndPartitionBatches();
+
+    // Requeue stale "running" batches
+    if (staleRunning.length > 0) {
+      console.log(`\n  Found ${staleRunning.length} stale "running" batch(es) (will requeue):`);
+      const store = await getStore();
+      for (const { status } of staleRunning) {
+        // Defensively check if queue entry still exists — if not, can't requeue
+        const queueKey = `queue/pending/${status.batch_id}`;
+        const existingSpec = await store.get(queueKey, { type: 'json' }).catch(() => null);
+        if (!existingSpec) {
+          // Queue entry is missing — can't requeue without the original job specs
+          await setBatchStatus(status.batch_id, 'error', {
+            ...status,
+            status: 'error',
+            error: 'stale batch with missing queue entry — cannot requeue (job specs lost)',
+            stale_at: new Date().toISOString(),
+          });
+          console.log(`    - ${status.batch_id} (stale, queue entry missing — marked error)`);
+        } else {
+          // Queue entry exists — reset to pending for reprocessing
+          await setBatchStatus(status.batch_id, 'pending', {
+            ...status,
+            status: 'pending',
+            requeued_at: new Date().toISOString(),
+            stale_reason: 'previous build crashed during processing',
+            succeeded: 0,
+            failed: 0,
+            skipped: 0,
+            results: [],
+          });
+          console.log(`    - ${status.batch_id} (stale since ${status.updated_at})`);
+        }
       }
     }
 
-    // Step 2: List pending jobs
-    const pendingJobs = await listPendingJobs();
-    if (pendingJobs.length === 0) {
-      console.log(`\n  No pending jobs in queue. Done.`);
+    if (pendingBatches.length === 0) {
+      console.log(`\n  No pending batches in queue. Done.`);
       console.log(`\n========== PROCESS_QUEUE_PLUGIN_END (empty) ==========\n`);
       return;
     }
 
-    console.log(`\n  Found ${pendingJobs.length} pending job(s). Processing up to ${MAX_JOBS_PER_BUILD}...`);
+    console.log(`\n  Found ${pendingBatches.length} pending batch(es). Processing...`);
 
-    // Step 3: Process jobs (with overall build timeout)
     let processed = 0;
-    let succeeded = 0;
-    let failed = 0;
-    for (const { spec } of pendingJobs.slice(0, MAX_JOBS_PER_BUILD)) {
-      // Check build timeout
-      const elapsedMs = Date.now() - buildStart;
-      if (elapsedMs > BUILD_TIMEOUT_MS - PER_JOB_TIMEOUT_MS) {
-        console.log(`\n  Approaching build timeout (${elapsedMs}ms elapsed). Stopping.`);
+    let succeededBatches = 0;
+    let failedBatches = 0;
+    for (const { spec } of pendingBatches) {
+      if (Date.now() - buildStart > BUILD_TIMEOUT_MS - 60_000) {
+        console.log(`\n  Approaching build timeout. ${pendingBatches.length - processed} batch(es) remaining (will be picked up next build).`);
         break;
       }
-
-      console.log(`\n  Processing job ${processed + 1}/${Math.min(pendingJobs.length, MAX_JOBS_PER_BUILD)}: ${spec.job_id}`);
-      const result = await processJob(spec);
-      processed++;
-      if (result.ok) succeeded++; else failed++;
+      console.log(`\n  Processing batch ${processed + 1}/${pendingBatches.length}: ${spec.batch_id}`);
+      try {
+        const result = await processBatchBuild(spec, buildStart);
+        processed++;
+        if (result.status === 'complete' || result.status === 'partial') succeededBatches++;
+        else failedBatches++;
+      } catch (e) {
+        console.error(`  Batch ${spec.batch_id} failed: ${e.message}`);
+        await setBatchStatus(spec.batch_id, 'error', { error: e.message, failed_at: new Date().toISOString() });
+        await dequeueBatch(spec.batch_id);
+        failedBatches++;
+        processed++;
+      }
     }
 
     const totalMs = Date.now() - buildStart;
     console.log(`\n========== PROCESS_QUEUE_PLUGIN_END ==========`);
-    console.log(`  Processed: ${processed} | Succeeded: ${succeeded} | Failed: ${failed}`);
+    console.log(`  Processed: ${processed} | Succeeded: ${succeededBatches} | Failed: ${failedBatches}`);
     console.log(`  Total time: ${totalMs}ms`);
     console.log();
   },

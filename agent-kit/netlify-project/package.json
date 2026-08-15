@@ -8,12 +8,12 @@
     "deploy:preview": "netlify deploy --message \"scraper deploy\"",
     "deploy:prod": "echo 'WARNING: prod deploys cost 15 credits each' && netlify deploy --prod",
     "logs": "netlify logs --json --since 1h",
-    "logs:follow": "netlify logs --follow",
-    "read-blobs": "node scripts/read-blobs.js",
-    "list-blobs": "node scripts/list-blobs.js"
+    "logs:follow": "netlify logs --follow"
   },
   "dependencies": {
     "@netlify/blobs": "^8.0.0",
-    "tls-impersonate": "^0.1.0"
+    "tls-impersonate": "^0.1.0",
+    "@sparticuz/chromium": "^127.0.0",
+    "puppeteer-core": "^23.0.0"
   }
 }
