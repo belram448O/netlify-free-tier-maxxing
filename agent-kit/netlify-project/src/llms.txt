@@ -1,0 +1,45 @@
+# Scraper API — Live Service
+
+## Base URL
+```
+https://6a7fba0ba3bffe9e51e12005--transcendent-cheesecake-03f934.netlify.app
+```
+
+## Auth
+All API requests require:
+```
+Authorization: Bearer nfp_YfWhZCYLjYQatPEcpjDPB5WGRD8RRKaGec87
+```
+
+## Endpoints
+
+### POST /api/scrape — Submit batch scrape
+```bash
+curl -X POST 'https://6a7fba0ba3bffe9e51e12005--transcendent-cheesecake-03f934.netlify.app/api/scrape' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer nfp_YfWhZCYLjYQatPEcpjDPB5WGRD8RRKaGec87' \
+  -d '{"jobs":[{"url":"https://example.com","engine":"fetch"}],"result_mode":"blob"}'
+```
+
+### Blob reads (PAT required, NO function call needed)
+```
+Site ID: 01c2e47f-3ff6-4e09-b45f-604c49ef90fe
+Store:   site:scraper-results
+```
+
+Read result:
+```bash
+curl -H "Authorization: Bearer nfp_YfWhZCYLjYQatPEcpjDPB5WGRD8RRKaGec87" \
+  'https://api.netlify.com/api/v1/blobs/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/site:scraper-results/result/<batch_id>-<index>'
+```
+
+Read status:
+```bash
+curl -H "Authorization: Bearer nfp_YfWhZCYLjYQatPEcpjDPB5WGRD8RRKaGec87" \
+  'https://api.netlify.com/api/v1/blobs/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/site:scraper-results/status/<batch_id>'
+```
+
+## Engines: fetch | chrome_impersonate | puppeteer
+## Modes: blob | inline | metadata | auto
+## Limits: 50 jobs sync, 500 queue, 5 concurrency sync, 10 queue
+# updated 1786755801315754110
