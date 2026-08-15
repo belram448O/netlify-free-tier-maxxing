@@ -1,31 +1,34 @@
 # Netlify Free-Tier Agent Kit
 
-A complete toolkit for maxxing Netlify's free tier (post-Sep 2025 credit-based pricing) for scraping, data pipelines, and background compute.
+Demo project + research findings for maxxing Netlify's free tier.
 
-## What's inside
+## Structure
 
-- **`netlify-project/`** — Ready-to-deploy Netlify project with:
-  - Batch scraper function with TLS impersonation (`tls-impersonate`)
-  - Queue processor build plugin (supports `puppeteer` for real Chrome)
-  - CLI tools (submit, status, result, list) — zero function calls for queue management
-  - Dashboard automation tool (SSO disable, bandwidth, observability)
-  - 32 sample API responses for mock testing
-- **`docs/`** — Research findings + skill instruction files:
-  - `findings-report.md` — Comprehensive preservation of all discoveries
-  - `agent-skill.md` — Dev-session-ready skill instruction file
-  - `dashboard-automation.md` — bb-api endpoint reference + WAF test results
+- `netlify-project/scraper/` — Production scraper (imported as git submodule from [netlify-free-scraper](https://github.com/belram448O/netlify-free-scraper))
+- `netlify-project/src/` — Demo stub HTML
+- `netlify-project/netlify.toml` — Build config that wires the scraper's functions + plugins
+- `docs/` — Research findings + skill docs
 
 ## Quick start
 
 ```bash
-cd netlify-project
+git clone --recursive https://github.com/belram448O/netlify-free-tier-agent-kit.git
+cd netlify-free-tier-agent-kit/netlify-project
 npm install
-cd functions && npm install && cd ..
-npm install -g netlify-cli
+cd scraper && npm install && cd ..
 netlify link
 netlify deploy
 ```
 
-## GitHub
+## Scraper package
 
-Repo: https://github.com/belram448O/netlify-free-tier-agent-kit
+The actual scraper code lives in a separate repo: [netlify-free-scraper](https://github.com/belram448O/netlify-free-scraper)
+
+Features: batch processing, TLS impersonation, queued processing, puppeteer, blob storage, resume support.
+
+## Docs
+
+- `docs/agent-skill.md` — Dev-session-ready skill file
+- `docs/dashboard-automation.md` — bb-api endpoint reference + WAF test results
+- `docs/findings-report.md` — Comprehensive research preservation
+- `docs/free-tier-investigation-methodology.md` — Generalized methodology for any cloud platform

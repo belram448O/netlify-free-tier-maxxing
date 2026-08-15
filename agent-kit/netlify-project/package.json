@@ -1,19 +1,13 @@
 {
-  "name": "netlify-free-tier-scraper",
+  "name": "netlify-free-tier-agent-kit-demo",
   "version": "1.0.0",
   "private": true,
-  "description": "Netlify Free Tier scraper toolkit",
+  "description": "Demo project importing netlify-free-scraper as a submodule",
   "type": "module",
   "scripts": {
-    "deploy:preview": "netlify deploy --message \"scraper deploy\"",
-    "deploy:prod": "echo 'WARNING: prod deploys cost 15 credits each' && netlify deploy --prod",
-    "logs": "netlify logs --json --since 1h",
-    "logs:follow": "netlify logs --follow"
-  },
-  "dependencies": {
-    "@netlify/blobs": "^8.0.0",
-    "tls-impersonate": "^0.1.0",
-    "@sparticuz/chromium": "^127.0.0",
-    "puppeteer-core": "^23.0.0"
+    "deploy:preview": "netlify deploy --message 'agent-kit demo deploy'",
+    "scrape": "cd scraper && node cli/submit.mjs",
+    "status": "cd scraper && node cli/status.mjs",
+    "resume": "cd scraper && node cli/resume.mjs"
   }
 }

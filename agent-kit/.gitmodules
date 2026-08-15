@@ -1,0 +1,3 @@
+[submodule "netlify-project/scraper"]
+	path = netlify-project/scraper
+	url = https://github.com/belram448O/netlify-free-scraper.git

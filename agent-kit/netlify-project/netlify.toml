@@ -1,12 +1,12 @@
 [build]
-  command = "npm install"
+  command = "cd scraper && npm install && cd .. && npm install"
   publish = "src"
-  functions = "functions"
+  functions = "scraper/functions"
 
 [functions]
   node_bundler = "zisi"
   external_node_modules = ["tls-impersonate"]
-  included_files = ["functions/node_modules/**", "lib/**"]
+  included_files = ["scraper/functions/node_modules/**", "scraper/lib/**"]
 
 [[plugins]]
-  package = "./plugins/process-queue"
+  package = "./scraper/plugins/process-queue"

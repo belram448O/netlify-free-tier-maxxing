@@ -10,6 +10,7 @@ import {
   getStore, setBatchStatus, dequeueBatch, enqueueBatch,
   fetchWithUndici, fetchWithTlsImpersonate, processBatch, computeBatchStatus,
   resultsSummary, withTimeout, storeResult,
+  resumeIncompleteBatches,
 } from '../../lib/scraper.mjs';
 
 // === Puppeteer engine (build-only) ===
@@ -291,41 +292,24 @@ export default {
     const buildStart = Date.now();
     console.log(`\n========== PROCESS_QUEUE_PLUGIN started ${new Date().toISOString()} ==========`);
 
-    const { pendingBatches, staleRunning } = await listAndPartitionBatches();
-
-    // Requeue stale "running" batches
-    if (staleRunning.length > 0) {
-      console.log(`\n  Found ${staleRunning.length} stale "running" batch(es) (will requeue):`);
-      const store = await getStore();
-      for (const { status } of staleRunning) {
-        // Defensively check if queue entry still exists — if not, can't requeue
-        const queueKey = `queue/pending/${status.batch_id}`;
-        const existingSpec = await store.get(queueKey, { type: 'json' }).catch(() => null);
-        if (!existingSpec) {
-          // Queue entry is missing — can't requeue without the original job specs
-          await setBatchStatus(status.batch_id, 'error', {
-            ...status,
-            status: 'error',
-            error: 'stale batch with missing queue entry — cannot requeue (job specs lost)',
-            stale_at: new Date().toISOString(),
-          });
-          console.log(`    - ${status.batch_id} (stale, queue entry missing — marked error)`);
-        } else {
-          // Queue entry exists — reset to pending for reprocessing
-          await setBatchStatus(status.batch_id, 'pending', {
-            ...status,
-            status: 'pending',
-            requeued_at: new Date().toISOString(),
-            stale_reason: 'previous build crashed during processing',
-            succeeded: 0,
-            failed: 0,
-            skipped: 0,
-            results: [],
-          });
-          console.log(`    - ${status.batch_id} (stale since ${status.updated_at})`);
-        }
+    // === Resume incomplete batches (crash recovery) ===
+    console.log(`\n  Checking for incomplete batches to resume...`);
+    const resumeResult = await resumeIncompleteBatches();
+    if (resumeResult.requeued.length > 0) {
+      console.log(`  Requeued ${resumeResult.requeued.length} batch(es):`);
+      for (const r of resumeResult.requeued) {
+        console.log(`    - ${r.batch_id} (reason: ${r.reason}, age: ${Math.round(r.age_ms / 1000)}s)`);
       }
     }
+    if (resumeResult.orphaned.length > 0) {
+      console.log(`  Marked ${resumeResult.orphaned.length} orphaned batch(es) as error (job specs lost)`);
+    }
+    if (resumeResult.requeued.length === 0 && resumeResult.orphaned.length === 0) {
+      console.log(`  No incomplete batches found.`);
+    }
+
+    // === List and process pending batches ===
+    const { pendingBatches } = await listAndPartitionBatches();
 
     if (pendingBatches.length === 0) {
       console.log(`\n  No pending batches in queue. Done.`);

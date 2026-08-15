@@ -255,6 +255,15 @@ export async function fetchWithUndici(job, timeoutMs) {
       'Accept': '*/*',
       ...(job.headers || {}),
     };
+
+    // Partial download resume: if job.resume is true and we have a previous result
+    // with a known content-length, send a Range header to continue from where we left off.
+    // The caller must check the 'resume_from' field in the result and decide whether to
+    // concatenate with previous data.
+    if (job.resume && job.resume_from_bytes && job.resume_from_bytes > 0) {
+      headers['Range'] = `bytes=${job.resume_from_bytes}-`;
+    }
+
     const fetchOpts = {
       method: job.method || 'GET',
       headers,
@@ -266,14 +275,31 @@ export async function fetchWithUndici(job, timeoutMs) {
     }
     const r = await fetch(job.url, fetchOpts);
     const buf = await readCapped(r, MAX_RESPONSE_BYTES);
+
+    // Check if server responded with 206 Partial Content (resume supported)
+    const isPartialResponse = r.status === 206;
+    const contentRange = r.headers.get('content-range') || '';
+    const totalSize = contentRange ? parseInt(contentRange.match(/\/(\d+)/)?.[1] || '0') : 0;
+    const acceptRanges = r.headers.get('accept-ranges');
+
     return {
-      ok: r.ok,
+      ok: r.ok || isPartialResponse,
       status: r.status,
       body: buf,
       content_type: r.headers.get('content-type') || 'application/octet-stream',
       headers: Object.fromEntries(r.headers.entries()),
       redirected: r.redirected,
       final_url: r.url,
+      // Resume metadata
+      resume: {
+        requested: !!job.resume,
+        supported: acceptRanges === 'bytes' || isPartialResponse,
+        partial_response: isPartialResponse,
+        bytes_received: buf.length,
+        resume_from: job.resume_from_bytes || 0,
+        total_size: totalSize,
+        complete: totalSize > 0 && (job.resume_from_bytes || 0) + buf.length >= totalSize,
+      },
     };
   } finally {
     clearTimeout(timeout);
@@ -603,4 +629,96 @@ export function resultsSummary(results) {
     blob_key: r.blob_key,
     error: r.error,
   }));
+}
+
+// === Resume incomplete batches ===
+// Finds batches that are in 'running' or 'pending' state but have no corresponding
+// queue entry (orphaned), or that have been 'running' for too long (stale).
+// Re-enqueues them so the next build picks them up.
+
+export async function resumeIncompleteBatches() {
+  const store = await getStore();
+  const list = await store.list();
+
+  // Collect all status blobs and queue entries
+  const statusBlobs = (list.blobs || []).filter(b => b.key.startsWith('status/'));
+  const queueKeys = new Set((list.blobs || []).filter(b => b.key.startsWith('queue/pending/')).map(b => b.key));
+
+  const now = Date.now();
+  const resumeable = [];
+  const orphaned = [];
+
+  for (const sb of statusBlobs) {
+    try {
+      const status = await store.get(sb.key, { type: 'json' });
+      if (!status || !status.batch_id) continue;
+
+      const batchId = status.batch_id;
+      const queueKey = `queue/pending/${batchId}`;
+      const hasQueueEntry = queueKeys.has(queueKey);
+      const updatedAt = status.updated_at ? new Date(status.updated_at).getTime() : 0;
+      const ageMs = now - updatedAt;
+
+      // Case 1: Status is 'running' but stale (> STALE_RUNNING_MS) — build crashed
+      if (status.status === 'running' && ageMs > STALE_RUNNING_MS) {
+        if (hasQueueEntry) {
+          // Queue entry still exists — reset to pending for reprocessing
+          resumeable.push({ batch_id: batchId, status, reason: 'stale_running_with_queue', age_ms: ageMs });
+        } else {
+          // Queue entry is gone — can't reprocess without job specs
+          orphaned.push({ batch_id: batchId, status, reason: 'stale_running_no_queue', age_ms: ageMs });
+        }
+      }
+
+      // Case 2: Status is 'pending' but has no queue entry — orphaned
+      if (status.status === 'pending' && !hasQueueEntry) {
+        orphaned.push({ batch_id: batchId, status, reason: 'pending_no_queue', age_ms: ageMs });
+      }
+
+      // Case 3: Status is 'partial' with skipped jobs and has queue entry —
+      // (This shouldn't happen because processBatchBuild requeues skipped jobs,
+      //  but check defensively)
+      if (status.status === 'partial' && hasQueueEntry && status.skipped > 0) {
+        resumeable.push({ batch_id: batchId, status, reason: 'partial_with_skipped', age_ms: ageMs });
+      }
+    } catch {
+      // Skip unreadable status blobs
+    }
+  }
+
+  // Re-enqueue resumeable batches
+  const requeued = [];
+  for (const r of resumeable) {
+    await setBatchStatus(r.batch_id, 'pending', {
+      ...r.status,
+      status: 'pending',
+      resumed_at: new Date().toISOString(),
+      resume_reason: r.reason,
+      succeeded: 0,
+      failed: 0,
+      skipped: 0,
+      results: [],
+    });
+    requeued.push(r);
+    console.log(`RESUME batch_id=${r.batch_id} reason=${r.reason} age=${Math.round(r.age_ms / 1000)}s`);
+  }
+
+  // Mark orphaned batches as error
+  const orphanedIds = [];
+  for (const o of orphaned) {
+    await setBatchStatus(o.batch_id, 'error', {
+      ...o.status,
+      status: 'error',
+      error: `orphaned: ${o.reason} (job specs lost)`,
+      orphaned_at: new Date().toISOString(),
+    });
+    orphanedIds.push(o.batch_id);
+    console.log(`ORPHAN batch_id=${o.batch_id} reason=${o.reason}`);
+  }
+
+  return {
+    requeued: requeued.map(r => ({ batch_id: r.batch_id, reason: r.reason, age_ms: r.age_ms })),
+    orphaned: orphanedIds.map(id => ({ batch_id: id, reason: 'no_queue_entry' })),
+    total_checked: statusBlobs.length,
+  };
 }
