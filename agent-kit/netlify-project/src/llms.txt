@@ -13,15 +13,18 @@ SCRAPE_API_KEY is set via `netlify env:set SCRAPE_API_KEY <key>`. Any shared sec
 - GET /api/result/{batchId}/{index} — Get result metadata + blob URL (NOT bytes)
 - GET /api/result/{batchId}/{index}?passthrough=1 — Get raw bytes (costs bandwidth)
 - GET /api/list — List recent batches
-- POST /api/trigger-build — Trigger build to process queue
+- POST /api/trigger-build — Creates deploy via API (does NOT trigger build plugin)
 - POST /api/resume — Resume incomplete batches
 
-## E2E flow (no CLI)
+## Queue processing limitation
+API deploys do NOT trigger the build process. Only `netlify deploy` CLI or Git push runs the build plugin (which processes the queue). For automated queue processing, use GitHub Actions cron with `netlify deploy`.
+
+## E2E flow
 1. POST /api/scrape (queue=true) → batch_id
-2. POST /api/trigger-build → deploy_id (forces build)
+2. `netlify deploy` (CLI) or git push → processes queue
 3. GET /api/status/{batchId} → poll until complete
-4. GET /api/result/{batchId}/0 → blob_url
-5. GET {blob_url} with NETLIFY_PAT → raw bytes (free)
+4. GET /api/result/{batchId}/0 → blob_url (metadata, NOT bytes)
+5. GET {blob_url} with NETLIFY_PAT → raw bytes (free, no bandwidth)
 
 ## Engines: fetch | chrome_impersonate | puppeteer
 ## TLS profiles: chrome120 (default) | firefox | safari | custom object
@@ -30,4 +33,4 @@ SCRAPE_API_KEY is set via `netlify env:set SCRAPE_API_KEY <key>`. Any shared sec
 
 ## Env vars on function:
 - SCRAPE_API_KEY (optional — API auth)
-- NETLIFY_AUTH_TOKEN + SITE_ID (for trigger-build)
+- NETLIFY_AUTH_TOKEN + SITE_ID (for trigger-build — creates deploy, but build plugin requires CLI/Git)

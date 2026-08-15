@@ -929,19 +929,19 @@ The `_nf-auth` JWT cookie expires (typically hours to days). To refresh without 
 
 1. **⚠️ CRITICAL: Disable SSO (project visibility) FIRST** — new Netlify sites start private by default. Without disabling SSO, function URLs return 401. Use: `node tools/netlify-dashboard-api.mjs disable-sso <site_id>`. This is the #1 reason functions fail after deploy. See `docs/dashboard-automation.md` for details.
 2. **Set SCRAPE_API_KEY env var** — protects the `/api/scrape` endpoint from anonymous abuse. Set via `netlify env:set SCRAPE_API_KEY <your-secret>`. Any shared secret works — NOT a Netlify PAT. Client sends it as `Authorization: Bearer <key>`.
-3. **Set NETLIFY_AUTH_TOKEN + SITE_ID env vars** — needed by `/api/trigger-build` endpoint (function uses these to create deploys with file content that forces the build process to run).
+3. **Set NETLIFY_AUTH_TOKEN + SITE_ID env vars** — needed by `/api/trigger-build` endpoint. BUT: API deploys do NOT trigger the build process — only `netlify deploy` CLI or Git push runs the build plugin. Use trigger-build for lightweight deploys; use CLI for queue processing.
 4. **Always `netlify deploy` (no `--prod`)** — preview deploys are free, function URLs work after SSO disable
 5. **SSO disable requires bb-api (cookie auth), NOT PAT** — the public API can't do it
 6. **bb-api has NO WAF** — plain curl with just `_nf-auth` cookie works. No browser/Playwright needed.
 7. **Build command phase has NO Blobs access** — write to `/tmp/`, plugin `onPostBuild` reads `/tmp/` and writes to Blobs
 8. **Function runtime has Blobs access** — `NETLIFY_BLOBS_CONTEXT` is auto-injected
 9. **`/api/result` returns blob URL, NOT bytes** — prevents 100MB blob from exhausting bandwidth credits. Client fetches bytes via blob URL (free via Blobs API with PAT). Use `?passthrough=1` only for small results.
-10. **`/api/trigger-build` writes real files** — creates a deploy with a `queue-trigger.json` file (not empty), which forces Netlify to run the build process and execute the queue plugin.
+10. **⚠️ API deploys do NOT trigger builds** — `POST /api/trigger-build` creates a deploy with file content, but Netlify treats API deploys as direct CDN uploads (completes in ~1s, no build process runs). Only `netlify deploy` CLI or Git push runs the build plugin (which processes the queue). For automated queue processing, use GitHub Actions cron with `netlify deploy`.
 11. **Default `fetch()` in functions = bot fingerprint** — use `tls-impersonate` with configurable `tls_profile` (chrome120, firefox, safari, or custom spec)
 12. **Blobs API is free** — read/write any volume, 0 credits, no egress meter
 13. **Trust the dashboard for credit state** — API `credits.used` lags 5-30 minutes
 14. **One Free team per Netlify user** — no per-org rotation
-15. **Full e2e via HTTP only** — submit → trigger-build → poll status → get blob URL → fetch blob. No CLI needed (except one-time deploy + SSO disable).
+15. **Sync scrape = no CLI needed; queue scrape = requires CLI/Git** — sync mode processes inline via function. Queue mode requires `netlify deploy` CLI or Git push to trigger the build plugin. Long-running scrapes (puppeteer, large files) should use GitHub Actions cron.
 
 ---
 
