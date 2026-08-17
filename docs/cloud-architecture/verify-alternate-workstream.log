@@ -1,0 +1,119 @@
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+[36mVERIFYING ALTERNATE WORKSTREAM'S CLAIMS (transparent re-check)[0m
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+
+[36m── Claim 1: NS on Netlify (dns*.p02.nsone.net) ──[0m
+  @1.1.1.1: ['dns1.p02.nsone.net.', 'dns2.p02.nsone.net.', 'dns3.p02.nsone.net.', 'dns4.p02.nsone.net.']  →  [32m✓ Netlify[0m
+  @8.8.8.8: ['dns1.p02.nsone.net.', 'dns2.p02.nsone.net.', 'dns4.p02.nsone.net.', 'dns3.p02.nsone.net.']  →  [32m✓ Netlify[0m
+  @9.9.9.9: ['dns2.p02.nsone.net.', 'dns4.p02.nsone.net.', 'dns3.p02.nsone.net.', 'dns1.p02.nsone.net.']  →  [32m✓ Netlify[0m
+
+[36m── Claim 2: app.sonicloud.app CNAME → workers.dev, Worker responds ──[0m
+  @1.1.1.1: CNAME = ['sonicloud-root-worker.sonicloud.workers.dev.']
+  @1.1.1.1: A     = ['sonicloud-root-worker.sonicloud.workers.dev.', '104.21.19.229', '172.67.190.113']
+  [32m✓ CNAME points to workers.dev[0m
+
+  Live test: curl https://app.sonicloud.app/__health
+  HTTP/2 200 
+date: Mon, 17 Aug 2026 10:37:59 GMT
+content-type: application/json
+content-length: 230
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=onxemuXxmuRjcLc8bpogoxs3cvGXtXbxoZFpV9kn9Jb17g92azJda9YTmy5ke9AFh4LCUhYOTczLKLMzGYCiE1afD%2BQUtMF4Pei08MGL71yI1p5yIiMLNoVzn7vB3KK%2BpqWD8g%3D%3D"}]}
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+server: cloudflare
+cf-ray: a2c80bedea404fc8-HKG
+alt-svc: h3=":443"; ma=86400
+
+{"ok":true,"service":"sonicloud.app root","worker":"sonicloud-root-worker","version":"3.
+  [32m✓ Worker IS serving on app.sonicloud.app[0m
+
+[36m── Claim 3: CF zone still 'active' even with NS on Netlify ──[0m
+  zone id=b09e8c12f3cf7058d42e03d0c6b0d077 status=active name=sonicloud.app
+  name_servers (CF assigned) = ['giancarlo.ns.cloudflare.com', 'hazel.ns.cloudflare.com']
+  original_name_servers = ['launch1.spaceship.net', 'launch2.spaceship.net']
+  [32m✓ CF zone is active (NS change didn't deactivate it)[0m
+
+[36m── Claim 4: apex sonicloud.app serves Worker (via ALIAS) ──[0m
+  @1.1.1.1: A = ['172.67.190.113', '104.21.19.229']
+  Live: HTTP/2 200 
+date: Mon, 17 Aug 2026 10:37:59 GMT
+content-type: application/json
+content-length: 230
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=%2F22sdocEkV8X8QQbrSWqnluoKuU7DkSwCQKzd4o6PDUOb69VXCsF19fDPNWTcAWL647PZMjVTtcEQR%2FTmF1Gu
+  [32m✓ Apex Worker responds[0m
+
+[36m── Claim 5: Vercel serves docs.sonicloud.app + blog.sonicloud.app ──[0m
+  docs.sonicloud.app CNAME = ['cname.vercel-dns.com.']
+  HTTP response: HTTP/2 200 
+  [32m✓ docs on Vercel[0m
+  blog.sonicloud.app CNAME = ['cname.vercel-dns.com.']
+  HTTP response: HTTP/2 200 
+  [32m✓ blog on Vercel[0m
+
+[36m── Claim 6: Old Netlify sub-zone for app.sonicloud.app was deleted ──[0m
+  Netlify DNS zones (6):
+    - name=sonicloud.app id=6a82da288732aff064d6277e NS=['dns1.p02.nsone.net', 'dns2.p02.nsone.net', 'dns3.p02.nsone.net', 'dns4.p02.nsone.net']
+    - name=cdn.sonicloud.app id=6a80b7c0ee37ee2d4890c59e NS=['dns1.p08.nsone.net', 'dns2.p08.nsone.net', 'dns3.p08.nsone.net', 'dns4.p08.nsone.net']
+    - name=api.sonicloud.app id=6a80b7ab139f4780ad78bf2a NS=['dns1.p09.nsone.net', 'dns2.p09.nsone.net', 'dns3.p09.nsone.net', 'dns4.p09.nsone.net']
+    - name=corp.sonicloud.app id=6a80b796139f47814f78bf0a NS=['dns1.p05.nsone.net', 'dns2.p05.nsone.net', 'dns3.p05.nsone.net', 'dns4.p05.nsone.net']
+    - name=content.sonicloud.app id=6a80b780a694d25f2145f208 NS=['dns1.p07.nsone.net', 'dns2.p07.nsone.net', 'dns3.p07.nsone.net', 'dns4.p07.nsone.net']
+    - name=users.sonicloud.app id=6a80588c88797781fbe34721 NS=['dns1.p07.nsone.net', 'dns2.p07.nsone.net', 'dns3.p07.nsone.net', 'dns4.p07.nsone.net']
+  [32m✓ app.sonicloud.app sub-zone was deleted (as claimed)[0m
+  [32m✓ sonicloud.app apex zone exists on Netlify (new) — claim verified[0m
+
+[36m── Claim 7: Worker Routes in CF apex zone ──[0m
+  Worker Routes (5):
+    - pattern=test-cf-worker.sonicloud.app/* script=sonicloud-root-worker
+    - pattern=app.sonicloud.app/* script=sonicloud-root-worker
+    - pattern=www.sonicloud.app/* script=sonicloud-root-worker
+    - pattern=sonicloud.app/* script=sonicloud-root-worker
+    - pattern=app-test-01.sonicloud.app/* script=app-test-01-worker
+  [32m✓ Worker Route for app.sonicloud.app exists[0m
+
+[36m── Bonus: Netlify apex zone records (if exists) ──[0m
+  Netlify apex zone: id=6a82da288732aff064d6277e NS=['dns1.p02.nsone.net', 'dns2.p02.nsone.net', 'dns3.p02.nsone.net', 'dns4.p02.nsone.net']
+  Records (41):
+    ALIAS  sonicloud.app                                 → sonicloud-root-worker.sonicloud.workers.dev
+    CAA    sonicloud.app                                 → cloudflare.com
+    CAA    sonicloud.app                                 → letsencrypt.org
+    CAA    sonicloud.app                                 → mailto:admin@sonicloud.app
+    CNAME  app.sonicloud.app                             → sonicloud-root-worker.sonicloud.workers.dev
+    CNAME  blog.sonicloud.app                            → cname.vercel-dns.com
+    CNAME  docs.sonicloud.app                            → cname.vercel-dns.com
+    CNAME  help.sonicloud.app                            → helpdesk.example.com
+    CNAME  www.sonicloud.app                             → sonicloud.app
+    MX     sonicloud.app                                 → route1.mx.cloudflare.net
+    MX     sonicloud.app                                 → route2.mx.cloudflare.net
+    MX     sonicloud.app                                 → route3.mx.cloudflare.net
+    NS     api.sonicloud.app                             → dns1.p09.nsone.net
+    NS     api.sonicloud.app                             → dns2.p09.nsone.net
+    NS     api.sonicloud.app                             → dns3.p09.nsone.net
+    NS     api.sonicloud.app                             → dns4.p09.nsone.net
+    NS     cdn.sonicloud.app                             → dns1.p08.nsone.net
+    NS     cdn.sonicloud.app                             → dns2.p08.nsone.net
+    NS     cdn.sonicloud.app                             → dns3.p08.nsone.net
+    NS     cdn.sonicloud.app                             → dns4.p08.nsone.net
+    NS     content.sonicloud.app                         → dns1.p07.nsone.net
+    NS     content.sonicloud.app                         → dns2.p07.nsone.net
+    NS     content.sonicloud.app                         → dns3.p07.nsone.net
+    NS     content.sonicloud.app                         → dns4.p07.nsone.net
+    NS     corp.sonicloud.app                            → dns1.p05.nsone.net
+    NS     corp.sonicloud.app                            → dns2.p05.nsone.net
+    NS     corp.sonicloud.app                            → dns3.p05.nsone.net
+    NS     corp.sonicloud.app                            → dns4.p05.nsone.net
+    NS     users.sonicloud.app                           → dns1.p07.nsone.net
+    NS     users.sonicloud.app                           → dns2.p07.nsone.net
+    NS     users.sonicloud.app                           → dns3.p07.nsone.net
+    NS     users.sonicloud.app                           → dns4.p07.nsone.net
+    TXT    _dmarc.api.sonicloud.app                      → v=DMARC1; p=quarantine; rua=mailto:admin@sonicloud.app; ruf=mailto:admin@soni...
+    TXT    _dmarc.app.sonicloud.app                      → v=DMARC1; p=quarantine; rua=mailto:admin@sonicloud.app; ruf=mailto:admin@soni...
+    TXT    _dmarc.cdn.sonicloud.app                      → v=DMARC1; p=quarantine; rua=mailto:admin@sonicloud.app; ruf=mailto:admin@soni...
+    TXT    _dmarc.content.sonicloud.app                  → v=DMARC1; p=quarantine; rua=mailto:admin@sonicloud.app; ruf=mailto:admin@soni...
+    TXT    _dmarc.corp.sonicloud.app                     → v=DMARC1; p=quarantine; rua=mailto:admin@sonicloud.app; ruf=mailto:admin@soni...
+    TXT    _dmarc.sonicloud.app                          → v=DMARC1; p=quarantine; rua=mailto:admin@sonicloud.app; ruf=mailto:admin@soni...
+    TXT    _dmarc.users.sonicloud.app                    → v=DMARC1; p=quarantine; rua=mailto:admin@sonicloud.app; ruf=mailto:admin@soni...
+    TXT    _mta-sts.sonicloud.app                        → v=STSv1; id=20260815T000000
+    TXT    sonicloud.app                                 → v=spf1 include:_spf.mx.cloudflare.net ~all
+
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+[36mVerification complete — see results above.[0m
+[36m══════════════════════════════════════════════════════════════════════════════[0m

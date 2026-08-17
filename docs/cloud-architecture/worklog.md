@@ -273,3 +273,46 @@ Next concrete work for the user:
   2. Probe Netlify Traffic Splits bb-api shape (needs browser _nf-auth cookie).
   3. Grandfathered account integration (needs user-provided known grandfathered Netlify account IDs).
   4. Implement scripts/30_provision_pod.py (currently stub) — flow is fully documented in §2.5.
+
+---
+Task ID: 6 (correction after alternate workstream)
+Agent: main
+Task: Verify alternate workstream's claims, acknowledge what I got wrong, fix live state, document corrections
+
+Work Log:
+- User shared output from an alternate workstream that claimed to have proven CF Workers CAN serve on *.sonicloud.app via DNS-only CNAMEs to *.workers.dev at Netlify DNS — directly contradicting my earlier claim that CF error 1014 blocks this.
+- Wrote 18_verify_alternate_workstream.py to transparently re-check all 7 of their claims live.
+- Verified ALL 7 claims live:
+  1. NS on Netlify (dns1-4.p02.nsone.net) at all 3 resolvers
+  2. app.sonicloud.app CNAMEs to sonicloud-root-worker.sonicloud.workers.dev, Worker responds HTTP 200 v3.0.1
+  3. CF zone sonicloud.app still "active" even with NS on Netlify
+  4. Apex sonicloud.app serves Worker via ALIAS → workers.dev
+  5. Vercel serves docs/blog via CNAME → cname.vercel-dns.com
+  6. Old Netlify app.sonicloud.app sub-zone was deleted
+  7. Worker Route app.sonicloud.app/* exists in CF zone
+- ACKNOWLEDGED: I was WRONG on 3 key claims:
+  - "CF error 1014 blocks CNAME → workers.dev" — WRONG. 1014 only applies to PROXIED CNAMEs in CF zones. DNS-only CNAMEs at Netlify bypass it.
+  - "Per-account pod isolation requires a separately-registered domain" — WRONG. CNAME → <pod-worker>.<pod-acct>.workers.dev at Netlify DNS gives per-account isolation for free.
+  - "Apex must stay on CF for KV/Email Routing/WAF" — WRONG. CF zone stays "active" even with NS on Netlify; all zone-level features continue to work.
+- Discovered the Phase 3b Cron Trigger I deployed CORRECTLY FIRED after the alternate workstream's migration:
+  - Detected app-test-01.sonicloud.app was no longer responding (A record removed during migration)
+  - Set active: false in KV registry (updated_at: 2026-08-17T10:20:54.893Z)
+  - Apex Worker's pickPod saw no active pods, fell through to HTML landing page (correct failover behavior)
+  - This is a real-world validation of Phase 3b — the Cron works in production.
+- Fixed KV registry: changed pod hostname from dead app-test-01.sonicloud.app to live app.sonicloud.app. Routing /app/test now 302-redirects correctly.
+- Wrote 03_CORRECTION_ALTERNATE_WORKSTREAM.md documenting:
+  - What the alternate workstream proved (all 7 claims, verified)
+  - What I got wrong (3 claims, with specific quotes from my docs)
+  - The corrected architecture (Netlify apex + CNAME → workers.dev pattern)
+  - What the alternate workstream changed (live infra)
+  - What I changed after (KV registry update)
+  - Phase 3b Cron validation in production
+  - 5 lessons learned (test the actual experiment; "proxied" is CF-specific; CF zone "active" is sticky; Netlify apex is more flexible for pod fleet; Cron failover works in production)
+
+Stage Summary:
+- The alternate workstream was RIGHT, I was WRONG on 3 key architectural claims.
+- The corrected architecture: Netlify apex DNS + CF zone still active + CNAME → workers.dev for per-account pod isolation. No separate domain registration needed.
+- Worker v3.0.1 unchanged — it works correctly in the new Netlify-apex context (all features preserved: KV router, geo, cron, A/B, admin gate).
+- Phase 3b Cron Trigger validated in production — correctly detected pod failure and updated KV registry.
+- Routing end-to-end works: sonicloud.app/app/test → 302 → app.sonicloud.app/app/test → apex Worker responds.
+- 03_CORRECTION_ALTERNATE_WORKSTREAM.md is the authoritative reference for the corrected understanding. Future sessions should read it FIRST, then read 02_CLOUD_ARCHITECTURE.md with the corrections in mind.
