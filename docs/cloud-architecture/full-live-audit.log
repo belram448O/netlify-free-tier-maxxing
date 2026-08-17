@@ -1,0 +1,26 @@
+State saved to /home/z/my-project/nftm/docs/cloud-architecture/live-audit-state.json
+
+=== SUMMARY ===
+DNS: NS at ['dns1.p02.nsone.net.', 'dns2.p02.nsone.net.', 'dns3.p02.nsone.net.', 'dns4.p02.nsone.net.']
+CF zone: active
+Worker Routes: 5
+KV namespaces: 1
+Cron schedules: 1
+workers.dev: sonicloud
+Netlify DNS zones: 6
+Netlify apex zone records: 41
+Vercel projects: 3
+HTTP endpoints tested: 13
+  https://sonicloud.app/                                  → 200
+  https://sonicloud.app/__health                          → 200
+  https://sonicloud.app/__routes                          → 401
+  https://sonicloud.app/app/test                          → 302
+  https://www.sonicloud.app/                              → 200
+  https://app.sonicloud.app/__health                      → 200
+  https://docs.sonicloud.app/                             → 200
+  https://blog.sonicloud.app/                             → 200
+  https://users.sonicloud.app/                            → None
+  https://api.sonicloud.app/                              → None
+  https://cdn.sonicloud.app/                              → None
+  https://content.sonicloud.app/                          → None
+  https://corp.sonicloud.app/                             → None

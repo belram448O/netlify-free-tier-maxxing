@@ -6,21 +6,25 @@
 
 ## Read in order (AUTHORITATIVE — read 04 first)
 
-1. **`04_FINAL_ARCHITECTURE.md`** ⭐ **THE AUTHORITATIVE REFERENCE** — the final cloud architecture consolidating everything. Read this FIRST. It supersedes contradictory claims in 02_CLOUD_ARCHITECTURE.md (which has stale v2.0.0/v2.1.0 references and wrong claims about CF error 1014 that were corrected by the alternate workstream). Covers: (a) the corrected architecture (Netlify apex + CF zone stays active + CNAME→workers.dev per-account pods); (b) the pod fleet pattern with per-account isolation; (c) credit budget allocation strategy for grandfathered vs credit-based Netlify accounts; (d) compute+page split (CF Worker routing, R2 static, Vercel SSR, Netlify Blobs cold storage, Netlify build-as-compute batch); (e) multi-region pod strategy; (f) A/B landing test strategy; (g) phased implementation status (Phase 0-1.5-3-4 ✅ DONE, Phase 2-5-6-7 🟡 PENDING user input).
+1. **`05_NETLIFY_ARCHITECTURE.md`** ⭐ **THE NETLIFY DELIVERABLE** — the Netlify-focused architecture doc. Read this for the Netlify research track's final answer. Covers: (a) what Netlify IS used for (DNS, Blobs, build-as-compute, Functions) and what it's NOT used for (routing compute → CF, hot storage → CF KV, SSR → Vercel); (b) the 6 credit meters with authoritative costs (from findings-report's dashboard-verified measurements, not the lagging API); (c) grandfathered vs credit-based allocation strategy (6.7× bandwidth multiplier, spread rule); (d) Netlify capabilities not yet used (WAF/Traffic Rules, Traffic Splits, Edge Functions deploy limitation); (e) live state verified 2026-08-17.
 
-2. **`03_CORRECTION_ALTERNATE_WORKSTREAM.md`** — transparent acknowledgment of what the alternate workstream proved and what I got wrong (3 specific claims). Read this to understand why 04 supersedes 02.
+2. **`04_FINAL_ARCHITECTURE.md`** — the broader architecture (CF + Netlify + Vercel + R2). Read this for the full picture including the CF Worker (apex router), KV pod registry, geo-routing, A/B, Cron health-check, and per-account pod isolation via CNAME → workers.dev.
 
-3. **`01_GROUND_TRUTH.md`** — the consolidated reference of everything I verified before writing the architecture doc. Still useful for the raw facts (Netlify free tier credit model, Blobs unmetered, build-as-compute, bb-api surface, etc.) but the architecture conclusions in it are superseded by 04.
+3. **`03_CORRECTION_ALTERNATE_WORKSTREAM.md`** — transparent acknowledgment of what the alternate workstream proved and what I got wrong (3 specific claims). Read this to understand why 04/05 supersede 02.
 
-4. **`02_CLOUD_ARCHITECTURE.md`** — the original cloud-architecture deep dive. **READ WITH CAUTION** — has stale v2.0.0/v2.1.0 references and 3 wrong claims that were corrected by the alternate workstream (see 03_CORRECTION). Kept for historical context; 04 is the authoritative version.
+4. **`01_GROUND_TRUTH.md`** — the consolidated reference of everything I verified before writing the architecture doc. Still useful for the raw facts (Netlify free tier credit model, Blobs unmetered, build-as-compute, bb-api surface, etc.) but the architecture conclusions in it are superseded by 04/05.
 
-5. **`WAVE-1-PEER-REVIEW.md`**, **`WAVE-2-VERIFY-REVIEW.md`**, **`WAVE-3-VERIFY-REVIEW.md`** — three opus peer review waves that verified the design + sandbox state. Wave 1 found 3 P0 + 6 P1 issues (all fixed). Wave 2 verified fixes + found 3 new P1 (all fixed). Wave 3 verified v3.0.0 + found 2 P0 (all fixed). Read for the review history.
+5. **`02_CLOUD_ARCHITECTURE.md`** — the original cloud-architecture deep dive. **READ WITH CAUTION** — has stale v2.0.0/v2.1.0 references and 3 wrong claims that were corrected by the alternate workstream (see 03_CORRECTION). Kept for historical context; 04/05 are the authoritative versions.
 
-6. **Probe scripts** (numbered `01_validate_tokens.py` through `20_credit_state_audit.py`) — the live-test scripts used to validate every claim. Run them again to re-verify state.
+6. **`WAVE-1-PEER-REVIEW.md`**, **`WAVE-2-VERIFY-REVIEW.md`**, **`WAVE-3-VERIFY-REVIEW.md`**, **`FINAL-REVIEW.md`** — four opus peer review waves that verified the design + sandbox state. All issues found were fixed. Read for the review history.
 
-7. **Probe logs** (`*.log`) — captured outputs from each probe run on 2026-08-17. Use as a baseline for diffing future state.
+7. **Probe scripts** (numbered `01_validate_tokens.py` through `25_full_live_audit.py`) — the live-test scripts used to validate every claim. Run them again to re-verify state.
 
-8. **`worklog.md`** — the multi-agent worklog protocol record for this session. Read to see the concrete steps taken.
+8. **Probe logs** (`*.log`) — captured outputs from each probe run on 2026-08-17. Use as a baseline for diffing future state.
+
+9. **`live-audit-state.json`** — complete live state JSON captured 2026-08-17 (DNS, CF zone, Worker Routes, KV, Netlify zones, HTTP reachability, Vercel). Machine-readable baseline for future diffing.
+
+10. **`worklog.md`** — the multi-agent worklog protocol record for this session. Read to see the concrete steps taken.
 
 ## Key conclusions (TL;DR from `04_FINAL_ARCHITECTURE.md`)
 

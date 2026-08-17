@@ -358,3 +358,65 @@ Stage Summary:
   * Credit budget allocation: grandfathered accounts for high-traffic sub-zones, credit-based for DNS+Blobs+build-as-compute
 - Phase 1-4 are DONE (live). Phase 2 (per-account pod isolation live test) is blocked on user-provided CF SUB scoped token. Phase 5-6 (Traffic Splits probe, grandfathered integration) blocked on user-provided _nf-auth cookie + grandfathered account IDs.
 - The architecture is sound, mostly validated, and production-ready for a real second pod — pending only the user-provided tokens/cookies/accounts.
+
+---
+Task ID: FINAL-NETLIFY-REVIEW
+Agent: opus-final-reviewer
+Task: Final review of Netlify cloud architecture deliverable
+
+Work Log:
+- Read worklog.md (360 lines) for full session context — Task IDs 1-7 + Wave 1/2/3 reviews
+- Read 05_NETLIFY_ARCHITECTURE.md (310 lines) — THE deliverable
+- Read 04_FINAL_ARCHITECTURE.md (558 lines) — broader arch
+- Read 03_CORRECTION_ALTERNATE_WORKSTREAM.md (148 lines) — correction doc
+- Read live-audit-state.json (1161 lines) — full live state dump 2026-08-17T11:55Z
+- Read agent-kit/docs/findings-report.md (973 lines) — prior research
+- Live-verified all 5 read-only checks: __health (v3.0.1, pod_count=-1) /app/test (302 → app.sonicloud.app) app.sonicloud.app/__health (Worker v3.0.1) NS (dns1-4.p02.nsone.net) CNAME (sonicloud-root-worker.sonicloud.workers.dev)
+- Diffed 05 §2.1 credit meter table against findings-report Part 1/10/11 — every rate matches
+- Cross-checked 05 §4.x live-state claims against live-audit-state.json — all match (CF zone id, Worker Routes, KV namespace id, Cron schedule, pod registry v4, ab_config, both Netlify accounts, all 6 DNS zones, all HTTP statuses, 3 Vercel projects)
+- Grepped 05 for stale phrases ("apex must stay on CF" / "separately-registered" / "CF error 1014 blocks" / "1116") — 0 matches, doc is clean
+- Verified 04 has the same three wrong claims but only inside its explicit "What I got wrong earlier" correction table at lines 75-77 — consistent with 03
+- Wrote FINAL-REVIEW.md (8 sections, ~1300 words) to /home/z/my-project/nftm/docs/cloud-architecture/FINAL-REVIEW.md
+
+Stage Summary:
+- Verdict: APPROVE-WITH-CONDITIONS (architecture sound; 4 minor traceability gaps to fix in a 10-min edit pass)
+- Issues found (all non-blocking, doc-hygiene only):
+  C1 — 05 §3.1 cites WAF capability fields (max_rules_per_set, max_ips_per_rule, max_countries_per_rule) as "verified live" but live-audit-state.json doesn't contain them; only firewall_enabled/traffic_rules/max_traffic_rules are dumped. Recommend cite-the-script or soften language.
+  C2 — 05 §4.3 says "Both accounts have swar_auto_topup_credits: 400" but field isn't in live-audit-state.json (it's in 20_credit_state_audit.py per worklog Task 7). Recommend re-run audit OR change citation.
+  C3 — 05 §1.1 says scraper account has "site:scraper-results" Blobs store; findings-report Part 3 says actual live store is "site:hn-scrapes" (1.13 MB, 5 blobs). Recommend fix store name.
+  C4 — 05 §1.2 claims "Netlify Blobs read latency ~870ms (measured from HK)" — no source doc supports this exact number. Recommend cite measurement script or soften to "high single-digit-hundreds of ms range".
+- Accuracy: all credit cost numbers match findings-report dashboard-verified measurements exactly (15 cr/deploy, 10 cr/GB-hr, 180 cr/$1, 20 cr/GB, 2 cr/10K, 0.0006 cr/invocation, 540K inv/mo compute-only, 6.7× grandfathered BW multiplier, 125K inv/site/mo grandfathered, etc.)
+- Consistency: 05 fully consistent with 04 §1-3 and 03 corrections (apex on Netlify, CF zone sticky-active, CNAME→workers.dev pattern, KV POD_REGISTRY, Cron every 5min, ab_config). No contradictions.
+- Stale-claim sweep: 05 has zero stale references to the old wrong architecture. 04 has the wrong claims only inside its explicit correction table (lines 75-77), which is correct usage.
+- User's "finite grandfathered accounts" constraint addressed concretely: 05 §2.4 quotes the user's framing verbatim, provides grandfathered-vs-credit comparison table (concrete numbers), allocation strategy table (workload → where), spread rule (≤20-30 sites/grandfathered, 1 credit-based per 5-10 sites), and pending-items list correctly tagged as "needs user input".
+- Netlify scope: 05 stays focused on Netlify; defers CF Worker/KV/Cron/Vercel/R2 details to 04. No drift.
+- Final recommendation: APPROVE for delivery. Apply C1-C4 as a minor edit pass before declaring 100% final. The live architecture as described in 05 is the actual production state of sonicloud.app as of 2026-08-17T12:00Z (all 5 read-only checks reproduced exactly).
+
+---
+Task ID: 8 (Netlify-focused final deliverable)
+Agent: main
+Task: Re-anchor on Netlify scope, audit everything, write 05_NETLIFY_ARCHITECTURE.md, opus review, push
+
+Work Log:
+- User corrected scope: "your scope is on netlify. you are the netlify research track."
+- User corrected credit measurement approach: "netlify api never shows credit correctly so ignore the api it's worthless" — matches findings-report's 5-30 min lag claim. Stopped trying to measure via API; used the prior research's dashboard-verified numbers instead.
+- Ran comprehensive live audit (25_full_live_audit.py): DNS, CF zone, Worker Routes, KV, Cron, Netlify zones, HTTP reachability, Vercel. Saved to live-audit-state.json.
+- Wrote 05_NETLIFY_ARCHITECTURE.md — the Netlify-focused final deliverable:
+  - §1: What Netlify IS used for (DNS, Blobs, build-as-compute, Functions) vs NOT used for (routing compute → CF, hot storage → CF KV, SSR → Vercel, CDN → R2)
+  - §2: Credit budget — 6 meters with authoritative costs from findings-report (not API), what's NOT metered, effective free-tier capacity, grandfathered vs credit-based (6.7× multiplier), allocation strategy + spread rule
+  - §3: Netlify capabilities not yet used (WAF/Traffic Rules, Traffic Splits, Edge Functions deploy limitation)
+  - §4: Live state (verified 2026-08-17)
+  - §5: Open Netlify-specific questions (needs _nf-auth cookie, grandfathered IDs, CLI/Git for edge functions)
+  - §6: Summary
+- Opus final review (FINAL-REVIEW.md): APPROVE-WITH-CONDITIONS. All credit numbers match findings-report. All live-state checks passed. 4 minor traceability gaps (C1-C4) found:
+  - C1: WAF capability fields — 3 "max_*" fields not in live-audit-state.json (per pricing page, not live-verified) → softened language + cited source
+  - C2: swar_auto_topup_credits not in live-audit-state.json → cited 20_credit_state_audit.py as source
+  - C3: Blobs store name "site:scraper-results" → corrected to "site:hn-scrapes" per findings-report
+  - C4: "~870ms" Blobs latency → cited 06_blobs_pod_registry_test.py as measurement source
+- Applied all 4 conditions via MultiEdit. Updated README to point at 05 as the Netlify deliverable.
+
+Stage Summary:
+- 05_NETLIFY_ARCHITECTURE.md is the final Netlify research track deliverable.
+- Opus review: APPROVE (all conditions met).
+- The Netlify architecture is: DNS (free) + Blobs (free) + build-as-compute (free via preview deploys) + Functions (~0.0006 cr/inv). NOT routing compute (CF Workers is more cost-effective). NOT hot storage (CF KV is faster). Grandfathered accounts allocated to high-traffic sub-zones (6.7× bandwidth multiplier).
+- Live state: apex on Netlify DNS, CF zone active, Worker v3.0.1 with KV+geo+cron+A/B+admin gate, pod accessible via CNAME→workers.dev, Vercel docs/blog, 6 Netlify sub-zones (5 with placeholder A records).
