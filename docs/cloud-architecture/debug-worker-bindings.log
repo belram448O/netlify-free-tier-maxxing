@@ -1,0 +1,82 @@
+[36m── Step 1: GET current Worker settings ──[0m
+  HTTP 200
+  success: True
+  bindings: [
+  {
+    "name": "POD_REGISTRY",
+    "namespace_id": "f5c32d0fdd9f4b18b3c508969224f239",
+    "type": "kv_namespace"
+  }
+]
+  usage_model: standard
+  compatibility_date: 2024-09-23
+
+[36m── Step 2: Find POD_REGISTRY namespace ID ──[0m
+  [32m✓[0m POD_REGISTRY id=f5c32d0fdd9f4b18b3c508969224f239
+
+[36m── Step 3: PATCH Worker bindings via /settings ──[0m
+  HTTP 415
+  success: False
+  errors: [
+  {
+    "code": 10001,
+    "message": "Content-Type must be one of: multipart/form-data"
+  }
+]
+
+[36m── Step 4: Verify settings ──[0m
+  bindings: [
+  {
+    "name": "POD_REGISTRY",
+    "namespace_id": "f5c32d0fdd9f4b18b3c508969224f239",
+    "type": "kv_namespace"
+  }
+]
+
+[36m── Step 5: Re-deploy Worker with proper multipart + bindings ──[0m
+  multipart body size: 4360 bytes
+  metadata.bindings: [{"type": "kv_namespace", "name": "POD_REGISTRY", "namespace_id": "f5c32d0fdd9f4b18b3c508969224f239"}]
+  HTTP 200  success=True
+  modified: 2026-08-17T08:03:47.012325Z
+  bindings: []
+  usage_model: standard
+
+  waiting 10s for deploy to propagate...
+
+[36m── Step 6: Test endpoints after re-deploy ──[0m
+
+  /__health:
+    HTTP/2 200 
+date: Mon, 17 Aug 2026 08:03:57 GMT
+content-type: application/json
+content-length: 209
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=Zdq%2BjhOESxoR%2BWSFZS5zOhezPH4o4d1vHe8NbcH8hh08dcrWwlMO2P2pUXhIdh9kY1wnjF4rWWbXjRkmNr1Upzw%2BAjaF1WaikSW7k9vXaxKkb47ikLVuNKm8XtRHE0O2"}]}
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+server: cloudflare
+cf-ray: a2c72a4bfd9e0865-HKG
+alt-svc: h3=":443"; ma=86400
+
+
+  /__routes:
+    HTTP/2 200 
+date: Mon, 17 Aug 2026 08:03:57 GMT
+content-type: application/json
+content-length: 548
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=GmGF6S7l530hXYKURijLV0wvdvvY8ULFmlnmod5vEhEgEwDBFFaiGvT0C%2Feh2W1hyLZOnRC7mVlxLTWx5BWjHKtnSa1lG06OYgtEx%2FSRk9sUQmhUBtEOJqCj8r1bThQc"}]}
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+server: cloudflare
+cf-ray: a2c72a4e6954104f-HKG
+alt-svc: h3=":443"; ma=86400
+
+
+
+  /app/test (expect 302):
+    HTTP/2 302 
+date: Mon, 17 Aug 2026 08:03:57 GMT
+content-length: 0
+location: https://app-test-01.sonicloud.app/app/test
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=GrGnq64xmG7jbAcr58KlYtlEBnjE3SGi7%2BYQVJU8gZ0CVj4PyTx5Wb7E1rOK7SKmQ2qROOyPWbi797rt8wbnrLEcMe%2FV4VjK5ONYN5chfboiQQeD1ivXJPatQsNYrOxb"}]}
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+server: cloudflare
+cf-ray: a2c72a4edab20998-HKG
+alt-svc: h3=

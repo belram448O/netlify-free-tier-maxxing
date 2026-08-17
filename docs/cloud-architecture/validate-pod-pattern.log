@@ -1,0 +1,44 @@
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+[36mVALIDATE CORRECTED POD PATTERN[0m
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+
+  [36mStep 1: Find CF MAIN workers.dev subdomain[0m
+    [31m✗[0m GET subdomain failed: HTTP 404 {'result': None, 'success': False, 'errors': [{'code': 10007, 'message': 'You do not have a workers.dev subdomain. Please go to https://dash.cloudflare.com/?to=/:account/workers/workers-and-pages. Ope
+
+  [36mStep 2: Deploy test pod Worker 'app-test-01-worker' to CF MAIN[0m
+    [32m✓[0m deployed Worker 'app-test-01-worker'
+      modified: 2026-08-17T07:57:47.934872Z
+
+  [36mStep 3: Find apex zone ID for sonicloud.app[0m
+    apex zone id: b09e8c12f3cf7058d42e03d0c6b0d077
+
+  [36mStep 4: Enable workers.dev subdomain for pod Worker[0m
+    [32m✓[0m workers.dev subdomain enabled
+
+  [36mStep 5: Test direct Worker URL: https://app-test-01-worker.sonicloud.workers.dev/__health[0m
+    HTTP None  elapsed=0.0ms
+    body: URLError: <urlopen error [Errno -2] Name or service not known>
+
+  [36mStep 6: Add CNAME in apex zone: app-test-01.sonicloud.app → app-test-01-worker.sonicloud.workers.dev[0m
+    [32m✓[0m CNAME created: id=4aaf380ac9699ae6c9916463804f8bd5
+
+  [36mStep 7: Wait 30s for DNS propagation, then verify[0m
+    DNS resolution:
+      @1.1.1.1: A = ['172.67.178.229', '104.21.17.247']
+      @1.1.1.1: CNAME = []
+      @8.8.8.8: A = ['172.67.178.229', '104.21.17.247']
+      @8.8.8.8: CNAME = []
+
+    HTTP test (via sonicloud.app hostname):
+      HTTP 403  elapsed=44.2ms  server=cloudflare
+      body: error code: 1014
+
+
+  [36mStep 8: Compare latency: direct workers.dev vs proxied via sonicloud.app[0m
+    Direct (workers.dev): ['0ms', '0ms', '0ms']  avg=0ms
+    Proxied (sonicloud.app): ['61ms', '30ms', '36ms']  avg=42ms
+    Overhead added by CF proxy: ~42ms
+
+[32m══════════════════════════════════════════════════════════════════════════════[0m
+[32mProbe complete. Pattern validated if HTTP 200 above.[0m
+[32m══════════════════════════════════════════════════════════════════════════════[0m

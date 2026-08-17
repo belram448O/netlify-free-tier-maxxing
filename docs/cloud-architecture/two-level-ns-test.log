@@ -1,0 +1,23 @@
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+[36mTEST A: One-level NS delegation (CF apex → CF pod-zone, both in CF MAIN)[0m
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+
+  [36mA.1: Check if app-test-01.sonicloud.app zone already exists[0m
+    not found — will create
+
+  [36mA.2: Create CF zone app-test-01.sonicloud.app in CF MAIN[0m
+    [31m✗ create failed: HTTP 400  {'success': False, 'errors': [{'code': 1116, 'message': 'Please ensure you are providing the root domain and not any subdomains (e.g., example.com, not subdomain.example.com)'}], 'messages': [], 'result': None}[0m
+
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+[36mTEST B: Two-level NS delegation (CF apex → Netlify sub-zone → CF pod-zone)[0m
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+
+  [36mB.1: Check if app-test-02.app.sonicloud.app zone already exists[0m
+    not found — will create
+
+  [36mB.2: Create CF zone app-test-02.app.sonicloud.app in CF MAIN[0m
+    [31m✗ create failed: HTTP 400  {'success': False, 'errors': [{'code': 1116, 'message': 'Please ensure you are providing the root domain and not any subdomains (e.g., example.com, not subdomain.example.com)'}], 'messages': [], 'result': None}[0m
+
+[32m══════════════════════════════════════════════════════════════════════════════[0m
+[32mProbe complete. Use scripts/10_deploy_apex_worker_kv.py + 11_deploy_pod_worker.py next.[0m
+[32m══════════════════════════════════════════════════════════════════════════════[0m

@@ -1,0 +1,81 @@
+[36m── Step 1: Find or create KV namespace 'POD_REGISTRY' ──[0m
+  [32m✓[0m created POD_REGISTRY namespace: id=f5c32d0fdd9f4b18b3c508969224f239
+
+[36m── Step 2: Seed POD_REGISTRY with routes ──[0m
+  [32m✓[0m seeded 'routes' key in POD_REGISTRY
+  [32m✓[0m read back: 312 bytes, 2 routes
+
+[36m── Step 3: Deploy new apex Worker 'sonicloud-root-worker' with KV binding + routing ──[0m
+  [32m✓[0m deployed new apex Worker 'sonicloud-root-worker' with KV binding
+    modified: 2026-08-17T08:02:27.846865Z
+    bindings: []
+
+[36m── Step 4: Test endpoints ──[0m
+
+  Test 1: GET /__health (enriched with pod_count)
+    HTTP 200  elapsed=52.9ms
+    body: {"ok":true,"service":"sonicloud.app root","worker":"sonicloud-root-worker","ts":"2026-08-17T08:02:28.453Z","region":"HKG"}
+
+  Test 2: GET /__routes (debug — show pod registry)
+    HTTP 200  elapsed=49.7ms
+    body: <!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>sonicloud.app — Landing</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root { color-scheme: light dark; }
+    body { font: 16px/1.5 system-ui, -apple-system, sans-serif; max-width: 640px;
+           margin: 4rem auto; padding: 0 1.5rem; color: #1a1a1a; }
+    h1 { font-size: 2rem
+
+  Test 3: GET /app/test (expect 302 to https://app-test-01.sonicloud.app/test)
+    HTTP 404  elapsed=127.6ms  Location: 
+
+  Test 4: GET /app/__health (follow 302 → pod Worker's __health)
+    curl -skL -i https://sonicloud.app/app/__health:
+    HTTP/2 200 
+date: Mon, 17 Aug 2026 08:02:28 GMT
+content-type: text/html;charset=utf-8
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=xhxBQmHfB0Kqbp4bf5qUofM8elqw08%2Bj7Jog0rYwFQITvXT2ZEuE2ySH%2BkNgufK%2Fsd56QN4rr5viV6Y2f5yhW2quS%2Bj5zpJtVfuC1aAeMs5Z4Q3QG9rDSrHXbq3RX28A"}]}
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+server: cloudflare
+cf-ray: a2c7282138930713-HKG
+alt-svc: h3=":443"; ma=86400
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>sonicloud.app — Landing</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root { color-scheme: light dark; }
+    body { font: 16px/1.5 system-ui, -apple-system, sans-serif; max-width: 640px;
+ 
+
+  Test 5: GET / (landing page — backward compat)
+    HTTP 200  elapsed=38.4ms  body_len=600
+    body (first 200): <!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>sonicloud.app — Landing</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root { c
+
+[36m── Step 5: Latency test (5 trials each) ──[0m
+  apex /__health                                      avg=39ms  min=36ms  max=46ms
+  apex /__routes                                      avg=45ms  min=32ms  max=79ms
+  apex /app/__health (302 + pod response)             avg=64ms  min=31ms  max=122ms
+  pod /__health (direct)                              avg=39ms  min=33ms  max=43ms
+
+[32m══════════════════════════════════════════════════════════════════════════════[0m
+[32mPhase 1 deployment complete. Apex Worker now has:[0m
+[32m  - KV binding (POD_REGISTRY namespace)[0m
+[32m  - /app/* routing → 302 to chosen pod (currently app-test-01.sonicloud.app)[0m
+[32m  - /__health enriched with pod_count + region info[0m
+[32m  - /__routes debug endpoint[0m
+[32m══════════════════════════════════════════════════════════════════════════════[0m

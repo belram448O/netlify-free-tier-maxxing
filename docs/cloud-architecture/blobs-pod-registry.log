@@ -1,0 +1,39 @@
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+[36mQ5 retry — Netlify Blobs as pod registry (scraper site, correct token)[0m
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+
+  Step 0: Verify token works on the scraper account
+    GET /accounts/{scraper_acct} → HTTP 200
+      name=belram448O’s team slug=belram448o type_slug=credit-free
+
+  Step 1: List existing blob stores
+    GET /blobs/{site} → HTTP 200
+      stores: ['site:scraper-results']
+
+  Step 2: Write pod-registry blob (presigned S3 URL flow)
+    Step 2a: PUT (get presigned URL) → HTTP 200
+      presigned URL host: https://cmh-services-prod-netliblob-935421240257.s3.us-east-2.amazonaws.com/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/site%3Apod-registry-test/registry.json
+[32m      Step 2b: S3 PUT (upload) → HTTP 200[0m
+
+  Step 3: Read registry back via API (3 latency trials)
+[32m    trial 1: HTTP 200  size=434B  elapsed=862.1ms  pods=3[0m
+[32m    trial 2: HTTP 200  size=434B  elapsed=907.7ms  pods=3[0m
+[32m    trial 3: HTTP 200  size=434B  elapsed=898.8ms  pods=3[0m
+
+  Step 4: List blobs in store
+    GET /blobs/{site}/{store} → HTTP 200
+      1 blobs in store:
+        - key=registry.json size=566 etag="5fc74a20df5f13f
+
+  Step 5: Implication for CF Worker pod registry reads
+    - Each CF Worker request would do one GET to api.netlify.com/api/v1/blobs/...
+    - Measured latency from this container (HK, similar to a CF Worker edge in HK):
+      ~800-900ms per blob read — this is the api.netlify.com round-trip + JSON parse
+    - Compare to CF KV: ~1ms warm / ~5ms cold (intra-CF, no cross-provider hop)
+    - Compare to CF D1: ~5-15ms (intra-CF, SQL query)
+[33m    - Recommendation: use CF KV for hot pod-registry reads; use Netlify Blobs for cold storage[0m
+      (e.g., full pod definitions, audit logs, large blobs that don't fit in KV's 25MB-per-key cap)
+[32m
+══════════════════════════════════════════════════════════════════════════════[0m
+[32mQ5 retry complete.[0m
+[32m══════════════════════════════════════════════════════════════════════════════[0m

@@ -1,0 +1,35 @@
+[36m── Step 0: Find apex zone ──[0m
+  apex zone id: b09e8c12f3cf7058d42e03d0c6b0d077
+
+[36m── Step 1: Delete the CNAME record (app-test-01.sonicloud.app → workers.dev) ──[0m
+  found CNAME: id=4aaf380ac9699ae6c9916463804f8bd5 content=app-test-01-worker.sonicloud.workers.dev proxied=True
+  [32m✓[0m deleted CNAME id=4aaf380ac9699ae6c9916463804f8bd5
+
+[36m── Step 2: Add A record (app-test-01.sonicloud.app → 192.0.2.1, proxied) ──[0m
+  [32m✓[0m A record created: id=eff27ccac7258e612c86a29fd74ec4a3
+
+[36m── Step 3: Add Worker Route (app-test-01.sonicloud.app/* → app-test-01-worker) ──[0m
+  existing Worker Routes: 2
+    pattern=www.sonicloud.app/* script=sonicloud-root-worker
+    pattern=sonicloud.app/* script=sonicloud-root-worker
+  [32m✓[0m Worker Route created: app-test-01.sonicloud.app/* → app-test-01-worker
+
+[36m── Step 4: Wait 30s for propagation, then verify ──[0m
+  DNS resolution:
+    @1.1.1.1: A = ['172.67.178.229', '104.21.17.247']
+    @8.8.8.8: A = ['172.67.178.229', '104.21.17.247']
+
+  HTTP test:
+    HTTP 200  elapsed=48.0ms  server=cloudflare
+    body: {"ok":true,"pod":"app-test-01","worker":"app-test-01-worker","region":"HKG","country":"HK","ts":"2026-08-17T08:00:53.028Z","version":"1.0.0"}
+
+[36m── Step 5: Latency comparison (apex Worker vs pod Worker) ──[0m
+  apex Worker  (sonicloud.app/__health):     ['51ms', '42ms', '37ms', '52ms', '36ms']  avg=43ms
+  pod Worker   (app-test-01.sonicloud.app/__health): ['46ms', '53ms', '42ms', '47ms', '33ms']  avg=44ms
+
+[32m══════════════════════════════════════════════════════════════════════════════[0m
+[32mProbe complete.[0m
+[32m  - If HTTP 200 above with JSON containing 'pod: app-test-01': PATTERN VALIDATED[0m
+[32m  - Worker Routes on apex zone works for pod hostnames (per-Worker isolation in CF MAIN)[0m
+[32m  - Per-account isolation requires separate registered domain (documented in arch doc)[0m
+[32m══════════════════════════════════════════════════════════════════════════════[0m

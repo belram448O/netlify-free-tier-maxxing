@@ -1,0 +1,3 @@
+[36m── Step 1: List permission groups available to cf_sub_token ──[0m
+  [31m✗ GET /user/tokens/permission_groups → HTTP 403  {'success': False, 'errors': [{'code': 9109, 'message': 'Valid user-level authentication not found'}], 'messages': [], 'result': None}[0m
+  [33mcf_sub_token cannot mint scoped tokens. Need to use dashboard to create a token.[0m

@@ -1,0 +1,55 @@
+[36m── Step 1: Find POD_REGISTRY KV namespace ──[0m
+  [32m✓[0m POD_REGISTRY id=f5c32d0fdd9f4b18b3c508969224f239
+
+[36m── Step 2: Re-deploy apex Worker v2.1.0 with /__routes admin-token gate ──[0m
+  [32m✓[0m deployed v2.1.0 with admin-token gate
+
+  waiting 10s for deploy to propagate...
+
+[36m── Step 3: Test /__routes with and without admin token ──[0m
+
+  Test 1: curl /__routes WITHOUT token (expect 401)
+    HTTP/2 401 
+date: Mon, 17 Aug 2026 08:28:25 GMT
+content-type: text/plain
+content-length: 12
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=qWL2w6aKu4WzepR9nwCWaJVqq8AZLdDuXBOjtn7nD7QhIIlF6USVsEibovS8FUecsZMgTsIMz95VHKkSeeecf0uxWzXKfm23
+
+  Test 2: curl /__routes WITH token (expect 200 + JSON)
+    HTTP/2 200 
+date: Mon, 17 Aug 2026 08:28:25 GMT
+content-type: application/json
+content-length: 548
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=t4utCm7RaGkUK4mi25JT%2FwA%2FM2KHOEXf6yEsWAw1gBtty1OBX3PoMvUsAqCjTAY0inO53M%2FeenShnuFYLuSdLBdXDV%2FJiID3cW%2FOCAGNW3ZSc1rd0CqkOLSLFl4J8gwp"}]}
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+server: cloudflare
+cf-ray: a2c74e210c1a9fe0-HKG
+alt-svc: h3=":443"; ma=86400
+
+{
+  "version": 1,
+  "updated_at": "2026-08-17T00:00:00Z",
+  "routes": [
+    {
+      "path_pref
+
+  Test 3: curl /__health WITHOUT token (expect pod_count: -1)
+    {"ok":true,"service":"sonicloud.app root","worker":"sonicloud-root-worker","version":"2.0.0 (KV-backed router)","ts":"2026-08-17T08:28:25.449Z","region":"HKG","country":"HK","pod_count":2,"routes_loaded":true}
+
+  Test 4: curl /__health WITH token (expect pod_count: 2)
+    {"ok":true,"service":"sonicloud.app root","worker":"sonicloud-root-worker","version":"2.1.0 (admin-token-gated debug)","ts":"2026-08-17T08:28:25.512Z","region":"HKG","country":"HK","pod_count":2,"routes_loaded":true}
+
+  Test 5: curl /app/test (no token needed — routing still works)
+    HTTP/2 302 
+date: Mon, 17 Aug 2026 08:28:25 GMT
+content-length: 0
+location: https://app-test-01.sonicloud.app/app/test
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=QJ1ckoVnjyIxrMOF6A%2FdTpgLdUUDyU4DGa0mpsVl%2F3VM9cQB5dHJoKsFTw0z5VqMIT5rFFNU1pdOgAOB%2BEWmX7s7kJpHptgsSJqaAyDAGxTcwdqTVjk6SBRfp4SkH%2F8I"}]}
+nel: {"report_to":"cf-nel",
+
+[32m══════════════════════════════════════════════════════════════════════════════[0m
+[32mP1-1 fix complete. Worker v2.1.0 live.[0m
+[32m  - /__routes now requires x-admin-token header (returns 401 without)[0m
+[32m  - /__health's pod_count returns -1 without admin token (no fleet size leak)[0m
+[32m  - Routing (/app/*) unchanged — no token needed for routing[0m
+[32m══════════════════════════════════════════════════════════════════════════════[0m

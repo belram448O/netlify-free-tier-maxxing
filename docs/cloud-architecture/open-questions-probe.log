@@ -1,0 +1,120 @@
+[36m
+══════════════════════════════════════════════════════════════════════════════[0m
+[36mQ1. Netlify WAF / Traffic Rules API surface[0m
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+  GET /sites/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/traffic_rules    → HTTP 404  Not Found
+  GET /sites/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/firewall         → HTTP 404  Not Found
+  GET /sites/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/firewall/rules   → HTTP 404  Not Found
+  GET /sites/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/waf              → HTTP 404  Not Found
+  GET /sites/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/traffic_rules_config → HTTP 401  {'code': 401, 'message': 'Access Denied'}
+  GET /accounts/6a7e84d51cdeff620a5cf5a0/firewall                  → HTTP 404  Not Found
+  GET /accounts/6a7e84d51cdeff620a5cf5a0/traffic_rules             → HTTP 404  Not Found
+  site.traffic_rules_config_per_scope = None
+  site.use_edge_handlers = None
+  site.functions_region = None
+  site.functions_region_overrides = None
+  site.dns_zone_id = None
+  site.managed_dns = None
+  site.branch_deploy_custom_domain = None
+  site.deploy_preview_custom_domain = None
+  site.has_database = None
+[36m
+══════════════════════════════════════════════════════════════════════════════[0m
+[36mQ2. Netlify Edge Functions — deploy surface + existing functions[0m
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+  /accounts/{acct}/edge_functions → HTTP 404  body={'code': 404, 'message': 'Not Found'}
+  /sites/{site}/edge_functions → HTTP 404  body=Not Found
+  GET /sites/01c2e47f-3ff6-4e09-b45f-604c49ef90fe/edge_functions → HTTP 404  body=Not Found
+  GET /accounts/6a7e84d51cdeff620a5cf5a0/edge_functions  → HTTP 404  body={'code': 404, 'message': 'Not Found'}
+[36m
+══════════════════════════════════════════════════════════════════════════════[0m
+[36mQ3. Netlify Traffic Splits API[0m
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+  GET /sites/{site}/traffic_splits → HTTP 404
+    body: {'code': 404, 'message': 'Not Found'}
+  POST /sites/{site}/traffic_splits (probe) → HTTP 404
+    body: {'code': 404, 'message': 'Not Found'}
+[36m
+══════════════════════════════════════════════════════════════════════════════[0m
+[36mQ4. CF Worker KV namespace availability on CF MAIN account[0m
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+  GET /accounts/{acct}/storage/kv/namespaces → HTTP 200
+    result: 0 namespaces
+  GET /accounts/{acct}/d1/database → HTTP 401
+  GET /accounts/{acct}/r2/buckets → HTTP 403
+    result: 0 buckets
+  GET /user/tokens/verify → HTTP 401
+    result: null
+[36m
+══════════════════════════════════════════════════════════════════════════════[0m
+[36mQ5. Netlify Blobs as pod registry (latency test from this container)[0m
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+  list blob stores → HTTP 401
+    stores: []
+[31m  PUT (get presigned URL) → HTTP 401 {"code":401,"message":"Access Denied: user does not have access"}
+[0m
+  GET registry.json trial 1 → HTTP 401  size=68B  elapsed=871.7ms
+  GET registry.json trial 2 → HTTP 401  size=68B  elapsed=877.1ms
+  GET registry.json trial 3 → HTTP 401  size=68B  elapsed=899.0ms
+  (cleanup: blob left in store site:pod-registry-test, key=registry.json — free, no cost)
+[36m
+══════════════════════════════════════════════════════════════════════════════[0m
+[36mQ6. Netlify DNS — multiple A records + query behavior[0m
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+  found app.sonicloud.app zone id=6a80b76a8879772642e346b6
+  current records (7):
+    A app.sonicloud.app → 192.0.2.1
+    CNAME www.app.sonicloud.app → app.sonicloud.app
+    TXT app.sonicloud.app → v=spf1 include:_spf.mx.cloudflare.net ~all
+    TXT _dmarc.app.sonicloud.app → v=DMARC1; p=quarantine; rua=mailto:admin@sonicloud.app; ruf=mailto:admin@sonicloud.app; pct=100; adkim=s; aspf=s
+    TXT _mta-sts.app.sonicloud.app → v=STSv1; id=20260815T000000
+    CAA app.sonicloud.app → letsencrypt.org
+    CAA app.sonicloud.app → cloudflare.com
+
+  Querying a known multi-A record domain (cloudflare.com) to see NS1 rotation behavior:
+    @1.1.1.1: ['104.16.132.229', '104.16.133.229']
+    @8.8.8.8: ['104.16.133.229', '104.16.132.229']
+    @9.9.9.9: ['104.16.133.229', '104.16.132.229']
+[36m
+══════════════════════════════════════════════════════════════════════════════[0m
+[36mQ7. NS delegation chain (registrar → CF → Netlify sub-zone) — verify current state[0m
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+  Current chain for users.sonicloud.app:
+    sonicloud.app NS @1.1.1.1: ['giancarlo.ns.cloudflare.com.', 'hazel.ns.cloudflare.com.']
+    users.sonicloud.app NS @1.1.1.1: ['dns1.p07.nsone.net.', 'dns2.p07.nsone.net.', 'dns3.p07.nsone.net.', 'dns4.p07.nsone.net.']
+    users.sonicloud.app A @dns1.p07.nsone.net: ['192.0.2.1']
+
+  Target pattern (not yet executed):
+    app.sonicloud.app                    [Netlify DNS zone, p01 pool]
+      └─ NS app-us-east-01.sonicloud.app → <cf-pod-zone-NS-1>, <cf-pod-zone-NS-2>  [pod CF zone in account B]
+    Verify with: dig +short NS app-us-east-01.sonicloud.app @dns1.p01.nsone.net
+    If NS1 accepts the NS delegation, the chain works. (NS1 supports NS records at any zone level.)
+[36m
+══════════════════════════════════════════════════════════════════════════════[0m
+[36mQ8. Grandfathered account detection (current account types)[0m
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+  GET /accounts → HTTP 200
+  accounts (1):
+    - id=6a7f8f3637d951add835956d name=zulfikarbarbora-y5u4uww’s team slug=zulfikarbarbora-y5u4uww type_name=Free type_slug=credit-free plan_credits=300
+
+  GET /accounts/types → HTTP 200
+  plan types (8):
+    - name=Free slug=credit-free id=687677b231c3132ff87ee9df available=False plan_credits=None monthly_dollar_price=None
+    - name=Personal slug=credit-personal id=6877c7e50a8ee71f93ba7c88 available=True plan_credits=None monthly_dollar_price=None
+    - name=Pro slug=credit-pro id=6878d4700a8ee773d63842a7 available=True plan_credits=None monthly_dollar_price=None
+    - name=Pro slug=credit-pro-tier-2 id=6aa085600000000000000000 available=True plan_credits=None monthly_dollar_price=None
+    - name=Pro slug=credit-pro-tier-3 id=696ac2f00000000000000000 available=True plan_credits=None monthly_dollar_price=None
+    - name=Pro slug=credit-pro-tier-4 id=6a63e0600000000000000000 available=True plan_credits=None monthly_dollar_price=None
+    - name=Pro slug=credit-pro-tier-5 id=552301e00000000000000000 available=True plan_credits=None monthly_dollar_price=None
+    - name=Enterprise slug=enterprise id=58f792a3d6865d698b6879bd available=False plan_credits=None monthly_dollar_price=0
+
+  sonicloud.app DNS account (6a7f8f3637d951add835956d):
+    type_name=Free type_slug=credit-free
+    plan_credits=300 capabilities.credits.used=0
+    capabilities.firewall_enabled={'included': True}
+    capabilities.traffic_rules={'included': True}
+    capabilities.max_traffic_rules={'included': 2, 'used': 0}
+[32m
+══════════════════════════════════════════════════════════════════════════════[0m
+[32mProbe complete — see output above for each question's findings.[0m
+[32m══════════════════════════════════════════════════════════════════════════════[0m

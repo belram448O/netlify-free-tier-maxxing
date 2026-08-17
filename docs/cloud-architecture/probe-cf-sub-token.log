@@ -1,0 +1,17 @@
+[36m── cf_sub_token capability probe ──[0m
+  Token: cf_sub_token (cfat_…, account-scoped)
+  CF SUB account ID: 50606d84046c1424f6c0ce69847080eb
+
+  [31m✗[0m GET /accounts/{sub_acct_id}                             HTTP 403  [{"code": 9109, "message": "Unauthorized to access requested resource"}]
+  [32m✓[0m GET /accounts (list)                                    HTTP 200  list[1]: [{"id": "50606d84046c1424f6c0ce69847080eb", "name": "Admin@sonicloud.app's Account", "type": "standard", "settings": {"enforce_twofactor": false, "api_access_enabled": null, "access_approval_expiry": 
+  [32m✓[0m GET /zones (list)                                       HTTP 200  list[0]: []
+  [32m✓[0m GET /zones?account.id={sub_acct_id}                     HTTP 200  list[0]: []
+  [32m✓[0m GET /zones?name=sonicloud.app (apex)                    HTTP 200  list[0]: []
+
+  [33m── Attempting to create test zone app-test-01.sonicloud.app in CF SUB ──[0m
+  [31m✗[0m POST /zones (create app-test-01.sonicloud.app)          HTTP 403  [{"code": 0, "message": "Requires permission \"com.cloudflare.api.account.zone.create\" to create zones for the selected account"}]
+
+[36m── Conclusion ──[0m
+  If POST /zones worked: cf_sub_token CAN create zones in CF SUB account.
+  This means we can use CF SUB as the 'pod account' for two-level NS delegation tests.
+  If 403/401: cf_sub_token lacks zone-create permission; would need to mint a scoped token via cf_main_token (which can mint scoped tokens).

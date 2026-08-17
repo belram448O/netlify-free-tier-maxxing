@@ -1,0 +1,31 @@
+Zone: sonicloud.app id=b09e8c12f3cf7058d42e03d0c6b0d077
+
+=== Worker script HTTP None ===
+  body: {'_err': 'Expecting value: line 1 column 1 (char 0)'}
+
+=== Worker script content (raw, /content) ===
+  HTTP 405
+  errors: [{'code': 10405, 'message': 'Method not allowed for this authentication scheme'}]
+
+=== Worker settings ===
+  bindings: []
+  usage_model: standard
+  compatibility_date: 2024-09-23
+  compatibility_flags: ['nodejs_compat']
+  limits: {}
+
+=== Worker Routes ===
+  pattern=www.sonicloud.app/* script=sonicloud-root-worker
+  pattern=sonicloud.app/* script=sonicloud-root-worker
+
+=== Worker versions ===
+  id=ce977413-ac73-431f-b3b5-0d7efd338878 created=None metadata={'created_on': '2026-08-14T23:04:32.233232Z', 'source': 'api', 'author_id': '178b11e39cc115bdd78e8d67c9ae0205', 'author_email': '', 'has_preview': True}
+
+=== KV namespaces in account ===
+
+=== D1 databases in account ===
+Traceback (most recent call last):
+  File "/home/z/my-project/scripts/04_retrieve_apex_worker.py", line 102, in <module>
+    for db in body.get("result", [])[:10]:
+              ~~~~~~~~~~~~~~~~~~~~~~^^^^^
+TypeError: 'NoneType' object is not subscriptable

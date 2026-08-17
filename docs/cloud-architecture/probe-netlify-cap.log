@@ -1,0 +1,145 @@
+
+[36m── Account 6a7f8f3637d951add835956d ──[0m
+  HTTP 200
+  ai_usage_limit_credits: null
+  ai_usage_limit_enforced: false
+  per_user_agent_runner_credit_limit: null
+  block_site_transfers: false
+  blocked_by_orb_migration: false
+  capabilities: {"dev_servers": {"included": 1, "max": 1, "used": 0}, "dev_server_cpu_cores": {"included": 1, "max": 1, "used": 0}, "dev_server_memory_gb": {"included": 4, "max": 4, "used": 0}, "dev_server_auto_shutd
+  created_at: 2026-08-14T21:57:10.404Z
+  current_billing_period_start: 2026-08-14T00:00:00.000-07:00
+  current_usage_period_start: 2026-08-14T00:00:00.000-07:00
+  days_until_disabled: null
+  deploy_diagnostics_setting: not_set
+  deploy_notifications_per_repo: true
+  enforce_mfa: not_enforced
+  exclude_from_site_suspension: false
+  extra_concurrent_builds: 0
+  extra_dev_servers: 0
+  grace_topup_granted_at: null
+  has_site_password: false
+  lifecycle_state: active
+  members_count: 1
+  next_billing_period_start: 2026-09-14T00:00:00.000-07:00
+  next_usage_period_start: 2026-09-14T00:00:00.000-07:00
+  role: Owner
+  saml_config: null
+  scheduled_downgrade_date: null
+  site_access: all
+  site_jwt_secret: null
+  site_password_context: all
+  site_sso_login: true
+  site_sso_login_context: all
+  sites_with_usage_exceeded: []
+  slug: zulfikarbarbora-y5u4uww
+  support_administration_enabled: true
+  support_level: 0
+  support_priority: 1
+  updated_at: 2026-08-14T21:57:10.453Z
+  usages_exceeded: []
+  auto_topup_enabled: false
+  billing_name: zulfikarbarbora-y5u4uww
+  billing_email: zulfikarbarbora@hotmail.com
+  billing_details: null
+  in_operational_mode: false
+  team_registration_domains: []
+  id: 6a7f8f3637d951add835956d
+  name: zulfikarbarbora-y5u4uww’s team
+  site_memberships: []
+  member_roles: [{"fixed_seat": true, "billable": true, "counts": {"accepted": 1, "pending": 0, "total": 1}, "role": "Owner"}, {"fixed_seat": true, "billable": false, "counts": {"accepted": 0, "pending": 0, "total": 
+  roles_allowed: ["Owner", "Reviewer"]
+  type_id: 687677b231c3132ff87ee9df
+  type_name: Free
+  type_slug: credit-free
+  monthly_seats_addon_dollar_price: null
+  has_stripe_payment_method: false
+  owner_ids: ["6a7f8f3637d951add835956a"]
+  saml_enabled: false
+  saml_session_expiration: 604800
+  org_saml_enabled: false
+  org_mfa_enabled: false
+  default: true
+  cancellable: true
+  has_builds: false
+  enforce_saml: not_enforced
+  team_logo_url: null
+  ai_usage_enabled_setting: enabled
+  can_start_pro_trial: false
+  on_pro_trial: false
+  can_start_enterprise_trial: false
+  on_enterprise_trial: false
+  security_contacts: []
+  credit_alert_percentage: null
+  plan_credits: 300
+  swar_auto_topup_credits: 400
+  member_monthly_dollar_price: 0
+  payment_provider_id: null
+  subscription_processing: false
+  gitlab_self_hosted_config: null
+  github_enterprise_config: null
+  bitbucket_self_hosted_config: null
+  configurable_limits_exceeded: []
+
+[36m── Billing profile ──[0m
+  HTTP 404
+  Not Found
+
+[36m── Plans ──[0m
+  HTTP 200
+  (list of 8)
+  [0]: {"name": "Free", "slug": "credit-free", "plan_family": null, "description": "Never receive a bill. Fixed credit allotments.", "capabilities": {"included": {"dev_servers": 1, "dev_server_cpu_cores": 1,
+  [1]: {"name": "Personal", "slug": "credit-personal", "plan_family": null, "description": "Single-member plan for personal projects, prototypes, or getting started.", "capabilities": {"included": {"dev_serv
+  [2]: {"name": "Pro", "slug": "credit-pro", "plan_family": "credit-pro", "description": "Team collaboration for professional web projects.", "capabilities": {"included": {"dev_servers": 1, "dev_server_cpu_c
+  [3]: {"name": "Pro", "slug": "credit-pro-tier-2", "plan_family": "credit-pro", "description": "Team collaboration for professional web projects.", "capabilities": {"included": {"dev_servers": 1, "dev_serve
+  [4]: {"name": "Pro", "slug": "credit-pro-tier-3", "plan_family": "credit-pro", "description": "Team collaboration for professional web projects.", "capabilities": {"included": {"dev_servers": 1, "dev_serve
+
+[36m── Bandwidth usage ──[0m
+  HTTP 200
+  used: 0
+  included: null
+  additional: 0
+  last_updated_at: 2026-08-17T07:12:47.915+00:00
+  period_start_date: 2026-08-14T00:00:00.000-07:00
+  period_end_date: 2026-09-14T00:00:00.000-07:00
+
+[36m── General usage ──[0m
+  HTTP 404
+  Not Found
+
+[36m── Sites ──[0m
+  HTTP 200
+  (list of 0)
+
+[36m── Account edge functions ──[0m
+  HTTP 200
+  used: 0
+  included: null
+  additional: 0
+  last_updated_at: 2026-08-17T07:12:50.940+00:00
+  period_start_date: 2026-08-14T00:00:00.000-07:00
+  period_end_date: 2026-09-14T00:00:00.000-07:00
+
+[36m── Forms ──[0m
+  HTTP 404
+  Not Found
+
+[36m── Recent deploys ──[0m
+  HTTP 404
+  Not Found
+
+[36m── Blob stores (account-level) ──[0m
+  HTTP 404
+  Not Found
+
+[36m── Functions ──[0m
+  HTTP 404
+  Not Found
+
+[36m── DNS zones + record counts ──[0m
+  cdn.sonicloud.app                    id=6a80b7c0ee37ee2d4890c59e  records=7  NS=['dns1.p08.nsone.net', 'dns2.p08.nsone.net', 'dns3.p08.nsone.net', 'dns4.p08.nsone.net']
+  api.sonicloud.app                    id=6a80b7ab139f4780ad78bf2a  records=7  NS=['dns1.p09.nsone.net', 'dns2.p09.nsone.net', 'dns3.p09.nsone.net', 'dns4.p09.nsone.net']
+  corp.sonicloud.app                   id=6a80b796139f47814f78bf0a  records=7  NS=['dns1.p05.nsone.net', 'dns2.p05.nsone.net', 'dns3.p05.nsone.net', 'dns4.p05.nsone.net']
+  content.sonicloud.app                id=6a80b780a694d25f2145f208  records=7  NS=['dns1.p07.nsone.net', 'dns2.p07.nsone.net', 'dns3.p07.nsone.net', 'dns4.p07.nsone.net']
+  app.sonicloud.app                    id=6a80b76a8879772642e346b6  records=7  NS=['dns1.p01.nsone.net', 'dns2.p01.nsone.net', 'dns3.p01.nsone.net', 'dns4.p01.nsone.net']
+  users.sonicloud.app                  id=6a80588c88797781fbe34721  records=7  NS=['dns1.p07.nsone.net', 'dns2.p07.nsone.net', 'dns3.p07.nsone.net', 'dns4.p07.nsone.net']
