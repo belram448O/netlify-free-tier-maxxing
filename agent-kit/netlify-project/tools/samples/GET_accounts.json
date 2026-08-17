@@ -1,0 +1,377 @@
+[
+  {
+    "ai_usage_limit_credits": null,
+    "ai_usage_limit_enforced": false,
+    "per_user_agent_runner_credit_limit": null,
+    "block_site_transfers": false,
+    "blocked_by_orb_migration": false,
+    "capabilities": {
+      "dev_servers": {
+        "included": 1,
+        "max": 1,
+        "used": 0
+      },
+      "dev_server_cpu_cores": {
+        "included": 1,
+        "max": 1,
+        "used": 0
+      },
+      "dev_server_memory_gb": {
+        "included": 4,
+        "max": 4,
+        "used": 0
+      },
+      "dev_server_auto_shutdown_after_minutes": {
+        "included": 30,
+        "used": 0
+      },
+      "custom_identity_email_templates": {
+        "included": false
+      },
+      "custom_outgoing_email_address": {
+        "included": false
+      },
+      "custom_provider_credentials": {
+        "included": true
+      },
+      "identity": {
+        "included": true
+      },
+      "identity_active_logins": {
+        "included": null
+      },
+      "identity_invited_users": {
+        "included": null
+      },
+      "firewall_enabled": {
+        "included": true
+      },
+      "max_rules_per_set": {
+        "included": 2,
+        "used": 0
+      },
+      "max_ips_per_rule": {
+        "included": 3,
+        "used": 0
+      },
+      "max_countries_per_rule": {
+        "included": 3,
+        "used": 0
+      },
+      "max_traffic_rules": {
+        "included": 2,
+        "used": 0
+      },
+      "traffic_rules": {
+        "included": true
+      },
+      "agent_runners": {
+        "included": 1,
+        "used": 0
+      },
+      "accumulate_overages": {
+        "included": false
+      },
+      "advanced_web_security": {
+        "included": false
+      },
+      "analytics": {
+        "included": true
+      },
+      "credit_features": {
+        "included": true
+      },
+      "credit_rollover": {
+        "included": false
+      },
+      "accessible_from_india_plans": {
+        "included": true
+      },
+      "ai_gateway_disabled": {
+        "included": true
+      },
+      "background_functions": {
+        "included": true
+      },
+      "be_auto_spammed": {
+        "included": true
+      },
+      "be_banned_for_crypto_mining": {
+        "included": true
+      },
+      "billable_members": {
+        "included": 1,
+        "max": 1,
+        "used": 0
+      },
+      "collaborators": {
+        "included": 1,
+        "max": 1,
+        "used": 1
+      },
+      "block_builds_on_unmatched_git_contributors": {
+        "included": true
+      },
+      "block_unmatched_git_contributors_strict": {
+        "included": true
+      },
+      "block_builds_when_usage_exceeded": {
+        "included": true
+      },
+      "cdn_fanout": {
+        "included": false
+      },
+      "compare_lighthouse_stats_with_prod": {
+        "included": false
+      },
+      "concurrent_builds": {
+        "included": 1,
+        "max": 1,
+        "used": 0
+      },
+      "connect_api": {
+        "included": false
+      },
+      "credits": {
+        "included": 300,
+        "used": 0
+      },
+      "custom_prerender": {
+        "included": false
+      },
+      "deploy_diagnostics": {
+        "included": true
+      },
+      "deploy_private_corp_repos": {
+        "included": false
+      },
+      "deploy_url_hooks": {
+        "included": true
+      },
+      "domains": {
+        "included": 10,
+        "used": 0
+      },
+      "india_pending_domain_transactions": {
+        "included": 3,
+        "used": 0
+      },
+      "env_var_scopes": {
+        "included": false
+      },
+      "env_var_secrets": {
+        "included": true
+      },
+      "exceed_max_collaborators": {
+        "included": false
+      },
+      "exclude_git_contributors_from_billing": {
+        "included": true
+      },
+      "global_access_controls": {
+        "included": false
+      },
+      "have_domains_capability_removed": {
+        "included": true
+      },
+      "ipv6_domain": {
+        "included": "cdn.makerloop.com"
+      },
+      "odb_limit": {
+        "included": 10000,
+        "used": 0
+      },
+      "pro_trial": {
+        "included": false
+      },
+      "real_user_metrics": {
+        "included": true
+      },
+      "requires_git_contributor_verification": {
+        "included": false
+      },
+      "role_access_control": {
+        "included": false
+      },
+      "safe_to_mark_members_as_spam": {
+        "included": true
+      },
+      "secure_site": {
+        "included": false
+      },
+      "secure_site_context": {
+        "included": true
+      },
+      "set_build_permissions": {
+        "included": false
+      },
+      "shared_env_variables": {
+        "included": false
+      },
+      "sites": {
+        "included": 500,
+        "used": 0
+      },
+      "sso_secure_site": {
+        "included": true
+      },
+      "support_priority": {
+        "included": 1,
+        "used": 0
+      },
+      "subscribe_to_add_ons": {
+        "included": true
+      },
+      "track_public_repo_committers": {
+        "included": false
+      },
+      "trusted_committers": {
+        "included": true
+      },
+      "unlimited_audit_log_retention": {
+        "included": false
+      },
+      "logs_api": {
+        "included": true
+      },
+      "dev_server_fair_use_per_day_minutes": {
+        "included": 120,
+        "used": 0
+      },
+      "dev_server_fair_use_per_month_minutes": {
+        "included": 3720,
+        "used": 0
+      },
+      "private_by_default_eligible": {
+        "included": true
+      },
+      "domain_purchases_per_hour": {
+        "included": 3,
+        "used": 0
+      },
+      "require_site_for_domain_purchase": {
+        "included": true
+      },
+      "custom_domain_changes_per_hour": {
+        "included": 3,
+        "used": 0
+      },
+      "domain_aliases_changes_per_hour": {
+        "included": 3,
+        "used": 0
+      },
+      "enforce_site_visibility": {
+        "included": true
+      }
+    },
+    "created_at": "2026-08-14T03:00:37.151Z",
+    "current_billing_period_start": "2026-08-14T00:00:00.000-07:00",
+    "current_usage_period_start": "2026-08-14T00:00:00.000-07:00",
+    "days_until_disabled": null,
+    "deploy_diagnostics_setting": "not_set",
+    "deploy_notifications_per_repo": true,
+    "enforce_mfa": "not_enforced",
+    "exclude_from_site_suspension": false,
+    "extra_concurrent_builds": 0,
+    "extra_dev_servers": 0,
+    "grace_topup_granted_at": null,
+    "has_site_password": false,
+    "lifecycle_state": "active",
+    "members_count": 1,
+    "next_billing_period_start": "2026-09-14T00:00:00.000-07:00",
+    "next_usage_period_start": "2026-09-14T00:00:00.000-07:00",
+    "role": "Owner",
+    "saml_config": null,
+    "scheduled_downgrade_date": null,
+    "site_access": "all",
+    "site_jwt_secret": null,
+    "site_password_context": "all",
+    "site_sso_login": true,
+    "site_sso_login_context": "all",
+    "sites_with_usage_exceeded": [],
+    "slug": "belram448o",
+    "support_administration_enabled": true,
+    "support_level": "0",
+    "support_priority": 1,
+    "updated_at": "2026-08-14T03:00:37.203Z",
+    "usages_exceeded": [],
+    "auto_topup_enabled": false,
+    "billing_name": "belram448O",
+    "billing_email": "[REDACTED]",
+    "billing_details": null,
+    "in_operational_mode": false,
+    "team_registration_domains": [],
+    "id": "6a7e84d51cdeff620a5cf5a0",
+    "name": "belram448O\u2019s team",
+    "site_memberships": [],
+    "member_roles": [
+      {
+        "fixed_seat": true,
+        "billable": true,
+        "counts": {
+          "accepted": 1,
+          "pending": 0,
+          "total": 1
+        },
+        "role": "Owner"
+      },
+      {
+        "fixed_seat": true,
+        "billable": false,
+        "counts": {
+          "accepted": 0,
+          "pending": 0,
+          "total": 0
+        },
+        "role": "Reviewer"
+      },
+      {
+        "fixed_seat": false,
+        "billable": false,
+        "counts": {
+          "active": 0,
+          "inactive": 0,
+          "total": 0
+        },
+        "role": "Git Contributor"
+      }
+    ],
+    "roles_allowed": [
+      "Owner",
+      "Reviewer"
+    ],
+    "type_id": "687677b231c3132ff87ee9df",
+    "type_name": "Free",
+    "type_slug": "credit-free",
+    "monthly_seats_addon_dollar_price": null,
+    "has_stripe_payment_method": false,
+    "owner_ids": [
+      "6a7e84d51cdeff620a5cf59e"
+    ],
+    "saml_enabled": false,
+    "saml_session_expiration": 604800,
+    "org_saml_enabled": false,
+    "org_mfa_enabled": false,
+    "default": true,
+    "cancellable": true,
+    "has_builds": false,
+    "enforce_saml": "not_enforced",
+    "team_logo_url": null,
+    "ai_usage_enabled_setting": "enabled",
+    "can_start_pro_trial": false,
+    "on_pro_trial": false,
+    "can_start_enterprise_trial": false,
+    "on_enterprise_trial": false,
+    "security_contacts": [],
+    "credit_alert_percentage": null,
+    "plan_credits": 300,
+    "swar_auto_topup_credits": 400,
+    "member_monthly_dollar_price": 0,
+    "payment_provider_id": null,
+    "subscription_processing": false,
+    "gitlab_self_hosted_config": null,
+    "github_enterprise_config": null,
+    "bitbucket_self_hosted_config": null,
+    "configurable_limits_exceeded": []
+  }
+]

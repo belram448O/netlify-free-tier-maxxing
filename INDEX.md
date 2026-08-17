@@ -39,6 +39,37 @@ This subdirectory mirrors what's published at `github.com/belram448O/netlify-fre
 | `agent-kit/netlify-project/scripts/trigger-deploy.js` | Script: trigger a deploy via API |
 | `agent-kit/netlify-project/scraper/...` | Submodule → github.com/belram448O/netlify-free-scraper |
 
+### `agent-kit/netlify-project/` ALSO contains inlined scraper code (recovered from `/tmp/my-project` snapshot)
+
+The maxxing repo's `agent-kit/netlify-project/` directory contains the scraper code inlined **directly** (not just as a submodule). This preserves the investigation-era code as it was actually deployed, before the scraper was split into its own repo. These files are NEW (added during this final sync):
+
+| Path | Purpose |
+|---|---|
+| `agent-kit/netlify-project/PROTOCOL.md` | Full API spec for the scraper (inlined copy) |
+| `agent-kit/netlify-project/README.md` | Project README (inlined copy — may differ from scraper repo's README) |
+| `agent-kit/netlify-project/cli/{list,result,status,submit}.mjs` | 4 CLI tools (inlined copies) |
+| `agent-kit/netlify-project/functions/scrape.mjs` | The 6-endpoint API function (inlined copy) |
+| `agent-kit/netlify-project/functions/download.mjs` | Extra: function for downloading blob bytes |
+| `agent-kit/netlify-project/functions/log-exfil.mjs` | Extra: function for log-based data exfiltration |
+| `agent-kit/netlify-project/functions/proxy.mjs` | Extra: proxy function |
+| `agent-kit/netlify-project/functions/package.json`, `package-lock.json` | Function deps |
+| `agent-kit/netlify-project/lib/scraper.mjs` | Shared library (inlined copy) |
+| `agent-kit/netlify-project/plugins/process-queue/index.js` | Puppeteer-capable queue processor (inlined copy) |
+| `agent-kit/netlify-project/plugins/process-queue/{manifest.yml,package.json}` | Plugin metadata |
+| `agent-kit/netlify-project/plugins/store-data/{index.js,manifest.yml,package.json}` | Extra: store-data plugin (write to Blobs) |
+| `agent-kit/netlify-project/src/build-scraper.js` | Extra: build-time scraper script |
+| `agent-kit/netlify-project/tools/netlify-dashboard-api.mjs` | bb-api automation CLI (inlined copy) |
+| `agent-kit/netlify-project/tools/samples/*.json` | **32 sample API responses** — saved JSON shapes from real bb-api calls, used for schema reference and mock testing |
+
+### The 32 sample API responses (`agent-kit/netlify-project/tools/samples/`)
+
+These are the actual response shapes captured during the investigation. Invaluable for:
+- Mock testing (build tests against saved shapes)
+- Schema change detection (re-probe later, diff against saved)
+- Documentation (show actual response structure)
+
+Files include: `GET_accounts.json`, `GET_accounts_{id}.json`, `GET_accounts_{id}_audit.json`, `GET_accounts_{id}_bandwidth.json`, `GET_accounts_{id}_compliance.json`, `GET_accounts_{id}_edge_functions.json`, `GET_accounts_{id}_env.json`, `GET_accounts_{id}_plans.json`, `GET_belram448o_billing_address.json`, `GET_belram448o_builds_status.json`, `GET_belram448o_sites.json`, `GET_dns_zones.json`, `GET_plans.json`, `GET_sites.json`, `GET_sites_{id}.json`, `GET_sites_{id}_blobs.json`, `GET_sites_{id}_build_hooks.json`, `GET_sites_{id}_deployed-branches.json`, `GET_sites_{id}_deploys`, `GET_sites_{id}_dev_servers_active.json`, `GET_sites_{id}_dns.json`, `GET_sites_{id}_env.json`, `GET_sites_{id}_forms.json`, `GET_sites_{id}_functions.json`, `GET_sites_{id}_insights.json`, `GET_sites_{id}_snippets.json`, `GET_sites_{id}_submissions.json`, `GET_sites_{id}_traffic_splits.json`, `GET_sites_{id}_usage.json`, `POST_sites_{id}_observability_query_counts`, `POST_sites_{id}_observability_query_timeseries`, `PUT_sites_{id}.json`, `SCHEMA_SUMMARY.json`
+
 ---
 
 ## `netlify-free-scraper/` — git submodule

@@ -1,6 +1,8 @@
 # Push Instructions — netlify-free-tier-maxxing
 
 > The current environment has **no GitHub credentials**. This file tells the next session / user how to push this repo to `github.com/belram448O/netlify-free-tier-maxxing` (which needs to be created).
+>
+> An **offline archive** of the entire repo (after the final commit) is also produced at `/home/z/my-project/download/netlify-free-tier-maxxing-final.tar.gz` so the contents survive the sandbox wipe even if the push itself fails or has to happen from a different machine.
 
 ---
 
@@ -11,7 +13,15 @@
 ✅ Moved `sonicloud-ns-architecture.md` to `cross-project-handoffs/` (not a Netlify artifact)
 ✅ Wrote `README.md` explaining maxxing = superset, agent-kit = clean subset
 ✅ Wrote `INDEX.md` cataloguing every artifact
+✅ Synced ALL missing content from the `/tmp/my-project` snapshot into the working tree:
+  - `agent-kit/netlify-project/` now contains the **inlined scraper code** (cli/, functions/, lib/, plugins/store-data/, tools/, PROTOCOL.md) plus extra functions (download.mjs, log-exfil.mjs, proxy.mjs)
+  - `agent-kit/netlify-project/tools/samples/` now contains the **32 sample API responses** (saved JSON shapes from the bb-api investigation)
+  - `netlify-log-probe/functions/` now contains 5 additional probe scripts (check-binding.js, check-deep.js, check-pkgs.js, scrape-af.js, scrape.js)
+  - `netlify-log-probe/plugins/probe-build/` (extra plugin)
+  - `netlify-log-probe/src/build-log-probe.js`, `build-probe.js`, `data-test.json`
 ✅ All changes staged for commit
+✅ Committed locally (commit hash: see `git log -1`)
+✅ Produced offline archive at `download/netlify-free-tier-maxxing-final.tar.gz`
 
 ## Pre-push checklist (TODO — requires GitHub PAT)
 
