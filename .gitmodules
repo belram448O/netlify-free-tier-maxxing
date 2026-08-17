@@ -1,0 +1,4 @@
+[submodule "netlify-free-scraper"]
+	path = netlify-free-scraper
+	url = https://github.com/belram448O/netlify-free-scraper.git
+	branch = master

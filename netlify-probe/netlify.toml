@@ -1,0 +1,14 @@
+[build]
+  command = "echo 'building probe site' && node src/build-probe.js"
+  publish = "src"
+  functions = "functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+# Schedule the function — this makes it invocable via the API
+[functions."scrape-scheduled"]
+  schedule = "@daily"
+
+[[plugins]]
+  package = "./plugins/probe-build"

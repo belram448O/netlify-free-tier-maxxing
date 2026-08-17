@@ -1,0 +1,9 @@
+{
+  "name": "netlify-log-probe",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@netlify/blobs": "^8.0.0",
+    "curl-cffi-node": "^0.1.8"
+  }
+}
