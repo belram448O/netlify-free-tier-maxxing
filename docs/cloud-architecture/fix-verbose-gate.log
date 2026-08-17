@@ -1,0 +1,41 @@
+[36m── Step 1: Find POD_REGISTRY KV namespace ──[0m
+  [32m✓[0m POD_REGISTRY id=f5c32d0fdd9f4b18b3c508969224f239
+
+[36m── Step 2: Deploy apex Worker v3.0.1 (security fix) ──[0m
+  [32m✓[0m deployed v3.0.1
+
+  Cron Trigger preserved from v3.0.0 (every 5 min)
+
+  waiting 15s for deploy to propagate...
+
+[36m── Step 3: Verify P0-A fix (verbose=1 no longer bypasses admin token) ──[0m
+
+  Test 1: GET /__health (no token, expect pod_count: -1, version: 3.0.1)
+    {"ok":true,"service":"sonicloud.app root","worker":"sonicloud-root-worker","version":"3.0.1 (verbose-gate-fix)","ts":"2026-08-17T09:20:25.851Z","region":"HKG","country":"HK","pod_count":-1,"routes_loaded":false,"ab_enabled":false}
+
+  Test 2: GET /__health?verbose=1 (no token, expect pod_count: -1, version: 3.0.1) — THIS IS THE FIX
+    {"ok":true,"service":"sonicloud.app root","worker":"sonicloud-root-worker","version":"3.0.1 (verbose-gate-fix)","ts":"2026-08-17T09:20:25.907Z","region":"HKG","country":"HK","pod_count":-1,"routes_loaded":false,"ab_enabled":false}
+    [31m✗[0m P0-A NOT FIXED — verbose=1 still leaks
+
+  Test 3: GET /__health (with admin token, expect pod_count: 1)
+    {"ok":true,"service":"sonicloud.app root","worker":"sonicloud-root-worker","version":"3.0.1 (verbose-gate-fix)","ts":"2026-08-17T09:20:26.390Z","region":"HKG","country":"HK","pod_count":1,"routes_loaded":true,"ab_enabled":false}
+
+  Test 4: GET /app/test (expect 302 to pod, A/B disabled so no cookie)
+    HTTP/2 302 
+date: Mon, 17 Aug 2026 09:20:26 GMT
+content-length: 0
+location: https://app-test-01.sonicloud.app/app/test
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=BA3fvy42en3V9K0tELiFRh8CKRV7HHwNo%2FntA7Sbqkrxp5fJ7huyoXeY3dSeghiV1jzB0yux%2FlFI3kSvHrO02iRrh43lfUuyOR4N1r6e8yYT%2B2MuTCxoV7SE%2FizUWMg7"}]}
+nel: {"report_to":"cf-nel",
+
+  Test 5: Enable A/B and verify Secure flag on variant cookie
+    [32m✓[0m Cookie header: set-cookie: variant=B; Path=/; Max-Age=31536000; SameSite=Lax; Secure
+    [32m✓[0m P2-2 FIXED: Secure flag present
+  A/B reverted to disabled
+
+[32m══════════════════════════════════════════════════════════════════════════════[0m
+[32mP0-A + P2-2 fixes complete. Worker v3.0.1 live.[0m
+[32m  - /__health?verbose=1 no longer leaks pod_count without admin token[0m
+[32m  - Variant cookie now has Secure flag[0m
+[32m  - All v3.0.0 functionality preserved (geo + cron + A/B + admin gate)[0m
+[32m══════════════════════════════════════════════════════════════════════════════[0m

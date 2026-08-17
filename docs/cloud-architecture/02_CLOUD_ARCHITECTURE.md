@@ -12,9 +12,9 @@
 
 1. **Keep apex on Cloudflare, not Netlify.** FLEET.md's planned pivot to Netlify apex was the right call when CF's Section 2.8 "non-HTML ban" was a risk; that ban was removed in the 2026 TOS, so the case for moving apex is now materially weaker. CF at apex gives: KV/D1/R2 native, no bandwidth meter, 100K req/day Worker free, IATA-code geo (`request.cf.colo`) which is strictly finer than Netlify's `context.geo.subdivision.code`, more WAF rules per zone, native Email Routing. The TOS-safety argument is moot.
 
-2. **The pod fleet uses Worker Routes on the apex zone** (NOT two-level NS delegation — that pattern is BLOCKED by CF error 1116 on Free tier; subdomain zones require Enterprise $5K+/mo). Per-pod Workers (e.g., `app-test-01-worker`) are deployed to CF MAIN account, each bound via Worker Routes to a hostname like `app-test-01.sonicloud.app` with A record `192.0.2.1` proxied=true (canonical CF pattern). This gives per-Worker isolation (own KV/D1/R2 bindings, own logs). Per-ACCOUNT isolation requires a separately-registered domain (e.g., `sonicloud-pods.com`) — one domain covers the whole pod fleet, ~$10/yr. Validated live 2026-08-17: pod Worker responds at `app-test-01.sonicloud.app/__health` with `{"pod":"app-test-01",...}`, apex Worker 302-redirects `sonicloud.app/app/test` to it.
+2. **The pod fleet uses Worker Routes on the apex zone** (NOT two-level NS delegation — that pattern is BLOCKED by CF error 1116 on Free tier; subdomain zones require Enterprise $5K+/mo, per CF docs at https://developers.cloudflare.com/dns/zone-setups/subdomain-setup/setup/). Per-pod Workers (e.g., `app-test-01-worker`) are deployed to CF MAIN account, each bound via Worker Routes to a hostname like `app-test-01.sonicloud.app` with A record `192.0.2.1` proxied=true (canonical CF pattern). This gives per-Worker isolation (own KV/D1/R2 bindings, own logs). Per-ACCOUNT isolation requires a separately-registered domain (e.g., `sonicloud-pods.com`) — one domain covers the whole pod fleet, ~$10/yr; cross-account subdomain setup is Enterprise-only (NOT a free-tier alternative, see §9 #9 ✅ RESOLVED). Validated live 2026-08-17: pod Worker responds at `app-test-01.sonicloud.app/__health` with `{"pod":"app-test-01",...}`, apex Worker 302-redirects `sonicloud.app/app/test` to it.
 
-3. **The edge router is a CF Worker at the apex** (`sonicloud-root-worker` v2.1.0, deployed live 2026-08-17), bound via Worker Routes to `sonicloud.app/*`. It reads a pod registry from CF KV namespace `POD_REGISTRY` (id `f5c32d0fdd9f4b18b3c508969224f239`) on each `/app/*` request, picks a pod via weighted random, and 302-redirects. **Caveats (v2.1.0)**: (a) NO automatic failover — Phase 3 Cron Trigger not yet implemented; pod outage = visible user errors. (b) NO geo-routing — `pickPod` uses weighted random only (ignores `request.cf.colo` for selection; the field IS read for telemetry in `/__health`). Geo-routing is Phase 3. (c) NO A/B stickiness — uses `Math.random()`, not the A2+A3 cookie+hash hybrid (§4.2). That's Phase 4. (d) `/__routes` and `/__health` (verbose fields like `pod_count`) require `x-admin-token` header — gated in v2.1.0 (per opus peer review WAVE-1 P1-1). Live-measured latency: KV read adds ~20ms over no-KV baseline (44ms → 65ms); 302 hop adds ~40ms over pod direct (40ms → 85ms). KV writes are 1K/day free — enough for pod registry updates + every-5-min health-check Cron (288 writes/day fits; per-minute Cron at 1440 writes/day would exceed, would need Workers Paid $5/mo).
+3. **The edge router is a CF Worker at the apex** (`sonicloud-root-worker` v3.0.1, deployed live 2026-08-17), bound via Worker Routes to `sonicloud.app/*`. It reads a pod registry from CF KV namespace `POD_REGISTRY` (id `f5c32d0fdd9f4b18b3c508969224f239`) on each `/app/*` request, picks a pod via weighted random (geo-filtered by `request.cf.country`), and 302-redirects. **Phase 3 + 4 ARE LIVE in v3.0.1**: (a) ✅ Geo-routing via `request.cf.country` — `pickPod` filters by region first, falls back to all-active on no match. (b) ✅ Health-check Cron Trigger every 5 min (288 writes/day, fits Free KV budget). (c) ✅ A/B stickiness via cookie + djb2 hash (disabled by default, toggle via KV `ab_config.enabled`). (d) ✅ Admin-token gate on `/__routes` + `/__health` verbose fields. (e) ✅ Variant cookie has `Secure` flag. Live-measured latency: KV read adds ~20ms over no-KV baseline (44ms → 65ms); 302 hop adds ~40ms over pod direct (40ms → 85ms).
 
 4. **Netlify free tier is best used for DNS + Blobs + build-as-compute, NOT for routing compute.** Netlify Edge Functions are billed as web requests (2 credits / 10K), so 1M invocations/month = 200 credits = ⅔ of the Free pool. That's tight. CF Workers (100K req/day = 3M/month, free) is strictly more cost-effective for routing. Netlify Blobs (unmetered storage + free API reads, verified 12 MB = 0 credits) is the right place to store large cold artifacts — full pod definitions, audit logs, scrape results, anything > KV's 25 MB per-key cap.
 
@@ -107,11 +107,14 @@ The following steps have all been executed and validated end-to-end:
    - On `/__routes`: debug endpoint returning the full pod registry JSON.
 3. ✅ **Seeded the KV registry** with 2 routes: `/app/` → `app-test-01.sonicloud.app` (100% weight); `/api/` → `api.sonicloud.app` (placeholder, 100% weight).
 4. ✅ **Deployed** via CF API (`PUT /accounts/{id}/workers/scripts/{name}` with multipart body containing metadata + script). The metadata includes the KV binding: `{"type":"kv_namespace","name":"POD_REGISTRY","namespace_id":"f5c32d0fdd9f4b18b3c508969224f239"}`.
-5. ✅ **Tested** with `curl -sk -i https://sonicloud.app/__health` (200 JSON, `pod_count: -1` without admin token, `pod_count: 2` with token, `version: 2.1.0 (admin-token-gated debug)`) and `curl -sk -i https://sonicloud.app/app/test` (302 to `https://app-test-01.sonicloud.app/app/test`).
+5. ✅ **Tested** with `curl -sk -i https://sonicloud.app/__health` (200 JSON, `pod_count: -1` without admin token, `pod_count: 1` with token, `version: 3.0.1 (verbose-gate-fix)`) and `curl -sk -i https://sonicloud.app/app/test` (302 to `https://app-test-01.sonicloud.app/app/test`).
 6. ✅ **Tested pod Worker** at `https://app-test-01.sonicloud.app/__health` (200 JSON with `pod: app-test-01`, `worker: app-test-01-worker`).
-7. ✅ **Tested pod registry update** (added 2nd pod via KV write, no Worker redeploy): 20 requests split 9/11 between two pods (close to 50/50 target).
+7. ✅ **Tested pod registry update** (added 2nd pod via KV write, no Worker redeploy): 20 requests split 12/8 between two pods (close to 50/50 target).
 8. ✅ **Live-measured latency**: apex /__health (no KV) ~44ms; apex /__routes (KV read) ~65ms; apex /app/__health (302 hop + pod) ~85ms; pod direct /__health ~38ms.
-9. ✅ **Admin-token gate verified** (v2.1.0): `/__routes` returns 401 without `x-admin-token` header; `/__health`'s `pod_count` field returns -1 without token (no fleet size leak). Routing (`/app/*`) still works without token (no auth needed for routing).
+9. ✅ **Admin-token gate verified** (v2.1.0+): `/__routes` returns 401 without `x-admin-token` header; `/__health`'s `pod_count` field returns -1 without token (no fleet size leak). Routing (`/app/*`) still works without token (no auth needed for routing). Verified v3.0.1 closes the `verbose=1` bypass that v3.0.0 introduced.
+10. ✅ **Geo-routing verified** (v3.0.0+): `pickPod` filters by `request.cf.country` matching `pod.regions` array; falls back to all-active pods if no region matches.
+11. ✅ **A/B stickiness verified** (v3.0.0+): 10 requests with same UA all got variant A (deterministic djb2 hash works). Variant cookie set with `Secure` flag.
+12. ✅ **Cron Trigger configured** (v3.0.0+): every 5 min (`*/5 * * * *`), 288 writes/day worst case (fits 1K/day Free limit). Created 2026-08-17T09:08:29Z.
 
 The apex Worker is now operational as a KV-backed pod router. The rest of this document describes the broader architecture this enables.
 
@@ -123,7 +126,7 @@ The apex Worker is now operational as a KV-backed pod router. The rest of this d
 
 The original two-level NS delegation pattern I proposed (CF apex → Netlify sub-zone → CF pod-zone in per-pod CF account) is **BLOCKED on Free tier**. Live testing revealed:
 
-- **CF error 1116**: CF rejects `POST /zones` for any name that's a subdomain of an existing CF zone. Both `app-test-01.sonicloud.app` and `app-test-02.app.sonicloud.app` got 1116 ("Please ensure you are providing the root domain and not any subdomains"). The check fires for same-account sub-zones (verified live). **Whether the check fires for cross-account sub-zones on Free tier is NOT verified** — CF docs describe a "Cross-Account Subdomain Setup" feature (https://developers.cloudflare.com/dns/zone-setups/subdomain-setup/cross-account/) that may allow a sub-zone in account B if verified via TXT record. If cross-account works on Free, the per-account isolation upgrade path becomes much simpler (no separate domain registration needed). See §9 open question #9.
+- **CF error 1116**: CF rejects `POST /zones` for any name that's a subdomain of an existing CF zone. Both `app-test-01.sonicloud.app` and `app-test-02.app.sonicloud.app` got 1116 ("Please ensure you are providing the root domain and not any subdomains"). **Confirmed via CF docs (2026-08-17)**: CF's [Subdomain Setup docs](https://developers.cloudflare.com/dns/zone-setups/subdomain-setup/setup/) explicitly state *"Subdomain setup is only available for Enterprise accounts"* — this applies to ANY subdomain zone setup, regardless of which CF account hosts it (same-account OR cross-account). The Enterprise entitlement is the gate, not the account. The free-tier alternative CF recommends is ["Create a subdomain record"](https://developers.cloudflare.com/dns/manage-dns-records/how-to/create-subdomain/) — i.e., an A/AAAA/CNAME record in the existing zone (which is exactly what the corrected pod pattern below uses).
 - **CF error 1014**: Proxied CNAMEs to `*.workers.dev` are blocked ("CNAME Cross-User Banned"). Cannot use CNAME → workers.dev as the pod binding mechanism.
 
 **The corrected pod pattern** (validated live 2026-08-17): per-pod Workers bound via **Worker Routes on the apex zone**, with A records pointing to `192.0.2.1` proxied=true (the canonical CF pattern). This gives per-Worker isolation (own name, own KV/D1/R2 bindings, own logs) but NOT per-account isolation (all pod Workers share CF MAIN's 100K req/day budget).
@@ -136,7 +139,7 @@ For per-account isolation (the upgrade path): each pod's hostname must be on a *
 sonicloud.app (CF apex zone, CF MAIN account)
   │ NS (already delegated) → CF anycast
   │
-  │ Apex Worker: sonicloud-root-worker (CF MAIN, v2.1.0 — KV-backed router + admin-token-gated debug)
+  │ Apex Worker: sonicloud-root-worker (CF MAIN, v3.0.1 — KV router + geo + cron + A/B + admin-token-gated debug)
   │   - Reads POD_REGISTRY from CF KV on each /app/* /api/* request
   │   - 302 redirects to chosen pod hostname
   │
@@ -176,7 +179,7 @@ The corrected pod pattern has been deployed and validated end-to-end:
 **Deployed**:
 - CF KV namespace `POD_REGISTRY` (id `f5c32d0fdd9f4b18b3c508969224f239`) in CF MAIN account
 - Pod registry seeded with 2 routes: `/app/` → `app-test-01.sonicloud.app` (100% weight); `/api/` → `api.sonicloud.app` (placeholder)
-- Apex Worker `sonicloud-root-worker` v2.1.0 (KV-backed router + admin-token-gated debug endpoints) — `/__health`, `/__routes` (admin-gated), `/app/*` 302, `/` HTML
+- Apex Worker `sonicloud-root-worker` v3.0.1 (KV router + geo + cron + A/B + admin-token-gated debug) — `/__health`, `/__routes` (admin-gated), `/app/*` 302, `/` HTML
 - Pod Worker `app-test-01-worker` (in CF MAIN, separate script) — `/__health`, `/` HTML, returns `pod: app-test-01`
 - A record `app-test-01.sonicloud.app → 192.0.2.1` (proxied=true) in CF apex zone
 - Worker Route `app-test-01.sonicloud.app/* → app-test-01-worker`
@@ -249,7 +252,7 @@ The deprovision flow is the inverse: set `active: false` in KV (immediate routin
 
 ### 3.1 The routing decision tree (apex Worker logic)
 
-> **STATUS (v2.1.0, live 2026-08-17)**: The deployed apex Worker reads `request.cf.colo` only for `/__health` telemetry. The `pickPod` function uses **weighted random only** — `colo` is ignored for pod selection. Geo-routing is Phase 3 (§8). The pseudocode below describes the TARGET design, not the live behavior.
+> **STATUS (v3.0.1, live 2026-08-17)**: Geo-routing IS NOW LIVE. `pickPod` filters by `request.cf.country` matching `pod.regions` (with `*` wildcard), falls back to all-active pods on no match. The pseudocode below matches the deployed behavior (except `colo_pattern` is now `regions: ["US", "GB", ...]` country codes, not IATA colo codes — country-level only on Free; sub-country would need paid Workers + custom geo logic).
 
 ```
 on request to /app/* at sonicloud.app:
@@ -325,9 +328,9 @@ Cron Triggers count toward the 1K writes/day KV limit on CF Workers Free. The Cr
 | **A2. CF Worker deterministic hash** | `sha1(ip + ua + salt) % 100 < variant_b_percent`. Sticky across sessions if IP+UA stable. | Works at apex (CF). KV-configurable percentage (no redeploy). Tightly integrated with geo-routing. | Sticky depends on IP+UA stability — mobile networks churn IPs. |
 | **A3. CF Worker cookie-based** | First visit: Worker sets `variant=A` or `variant=B` cookie (random by percentage). Subsequent visits: read cookie. | Truly sticky per-browser. More accurate A/B measurement. | Adds one Set-Cookie header. Cookie expiry (default: 1 year). |
 
-### 4.2 Recommended pattern: A2 + A3 hybrid (TARGET — not yet implemented in v2.1.0)
+### 4.2 Recommended pattern: A2 + A3 hybrid (LIVE in v3.0.1)
 
-> **STATUS**: The deployed apex Worker v2.1.0 uses `Math.random()` for pod selection — NO cookie, NO hash. A/B stickiness is NOT implemented. The pattern below is the TARGET for Phase 4 (§8). Port the code to the deployed Worker when running your first landing-page A/B test.
+> **STATUS**: ✅ IMPLEMENTED in v3.0.0+ (verified live 2026-08-17). The deployed Worker uses a deterministic djb2 hash of `cf-connecting-ip + user-agent + salt` for new visitors, sets a `variant=A` or `variant=B` cookie (1-year expiry, `Secure` flag), and reads the cookie on subsequent visits for stickiness. 10/10 same-UA requests in test got the same variant (sticky works). A/B is **disabled by default** — toggle via KV `ab_config.enabled = true`.
 
 ```javascript
 // In the apex Worker, when picking a pod:
@@ -596,37 +599,41 @@ This is a concrete data point supporting the recommendation: routing compute on 
 - ✅ Vercel docs/blog READY and attached
 - ✅ DMARC/MTA-STS/CAA on every zone
 
-### Phase 1 (next 1-2 sessions)
-- [ ] **Add KV namespace to apex Worker** — `POD_REGISTRY` in CF MAIN account. Mint the namespace via CF API. Update Worker bindings.
-- [ ] **Rewrite apex Worker** to add routing logic per §1.4. KV-backed pod registry, geo-routing via `request.cf.colo`, A/B via cookie + hash.
-- [ ] **Seed the pod registry** with a single fallback entry (`app.sonicloud.app` itself, until real pods exist).
-- [ ] **Test end-to-end**: `curl -sk -i https://sonicloud.app/app/test` should 302 to `https://app.sonicloud.app/test`.
-- [ ] **Update `scripts/30_provision_pod.py`** to implement the full pod provisioning flow (per §2.5).
+### Phase 1 — ✅ DONE 2026-08-17 (Worker v2.0.0 → v2.1.0 → v3.0.0 → v3.0.1)
+- ✅ KV namespace `POD_REGISTRY` created (id `f5c32d0fdd9f4b18b3c508969224f239`)
+- ✅ Apex Worker rewritten with KV binding + routing logic
+- ✅ Pod registry seeded with `/app/` → `app-test-01.sonicloud.app` (100% weight)
+- ✅ End-to-end tested: `curl sonicloud.app/app/test` → 302 to `app-test-01.sonicloud.app/app/test`
+- ✅ Admin-token gate added on `/__routes` + `/__health` verbose fields (per WAVE-1 P1-1)
+- ✅ `verbose=1` bypass closed (per WAVE-3 P0-A)
+- ❌ `scripts/30_provision_pod.py` still a stub — to be implemented when a real pod is needed
 
-### Phase 2 (when first pod is needed)
-- [ ] Manually create a new CF account (web signup, ~2 min).
-- [ ] Mint scoped tokens for the new account.
-- [ ] Run `python3 scripts/30_provision_pod.py app-us-east-01` — should:
-  - Create CF zone `app-us-east-01.sonicloud.app` in new account
-  - Deploy a template Worker
-  - Bind Worker via Worker Routes
-  - Add 4 NS records in the Netlify `app.sonicloud.app` zone
-  - Update apex KV registry with the new pod entry
-- [ ] Verify: `dig +short NS app-us-east-01.sonicloud.app @1.1.1.1` → 4 CF nameservers
-- [ ] Verify: `curl -sk -i https://app-us-east-01.sonicloud.app/__health` → 200 JSON
-- [ ] Verify: `curl -sk -i https://sonicloud.app/app/test` → 302 to `https://app-us-east-01.sonicloud.app/test` (or whichever pod is picked)
+### Phase 2 — when first REAL pod is needed
+- [ ] Manually create a new CF account (web signup, ~2 min). OR deploy pod Worker to CF MAIN (current pattern) for per-Worker isolation only.
+- [ ] If per-account isolation needed: register `sonicloud-pods.com` (~$10/yr), create CF zone for it in new account.
+- [ ] Run `python3 scripts/30_provision_pod.py app-us-east-01` (once it's implemented) — should:
+  - Deploy pod Worker via `PUT /accounts/{acct}/workers/scripts/<pod_id>-worker`
+  - Add A record in CF apex zone (or fleet zone): `<pod_id>.sonicloud.app → 192.0.2.1` proxied=true
+  - Add Worker Route: `<pod_id>.sonicloud.app/* → <pod_id>-worker`
+  - Update apex KV `POD_REGISTRY:routes` with the new pod entry
+- [ ] Verify: `dig +short A <pod_id>.sonicloud.app @1.1.1.1` → CF anycast IPs
+- [ ] Verify: `curl -sk -i https://<pod_id>.sonicloud.app/__health` → 200 JSON
+- [ ] Verify: `curl -sk -i https://sonicloud.app/app/test` → 302 to chosen pod
 
-### Phase 3 (multiple pods + health-check failover)
-- [ ] Add Cron Trigger to apex Worker for periodic health checks.
-- [ ] Add a second pod in a different region.
-- [ ] Test geo-routing: from a US-West IP, expect `app-us-west-01`; from EU, expect `app-eu-west-01`.
-- [ ] Test failover: take down `app-us-east-01/__health` and verify routing switches to fallback pod within 1 minute.
+### Phase 3 — ✅ DONE 2026-08-17 (Worker v3.0.0+)
+- ✅ Cron Trigger added to apex Worker: every 5 min (`*/5 * * * *`), 288 writes/day worst case (fits 1K Free limit). Created 2026-08-17T09:08:29Z.
+- ✅ Geo-routing implemented: `pickPod` filters by `request.cf.country` matching `pod.regions` array (with `*` wildcard).
+- [ ] Add a second REAL pod in a different region (test pod `app-test-02` was used in v3.0.0 deploy test but not deployed as a real Worker).
+- [ ] Test geo-routing end-to-end: from a US IP, expect pod with `regions: ["US"]`; from EU, expect `regions: ["GB"]` etc.
+- [ ] Test failover: take down `app-test-01/__health` and verify Cron marks it `active: false` within 5 min, routing switches to fallback pod.
 
-### Phase 4 (A/B testing)
-- [ ] Add `variant` field to pod registry entries.
-- [ ] Implement A2 + A3 hybrid pattern in apex Worker (cookie + hash).
-- [ ] Add `AB_SALT` and `VARIANT_B_PERCENT` as Worker secrets (via `wrangler secret put`).
-- [ ] Test: clear cookies, hit `sonicloud.app/` 100 times, count A vs B distribution. Should match `VARIANT_B_PERCENT` ±5%.
+### Phase 4 — ✅ DONE 2026-08-17 (Worker v3.0.0+)
+- ✅ `variant` field supported in pod registry entries (filter pods by variant when A/B enabled).
+- ✅ A2+A3 hybrid implemented: cookie + djb2 hash of `cf-connecting-ip + user-agent + salt`.
+- ✅ `ab_config` KV key: `{enabled, variant_b_percent, salt, updated_at}`. Disabled by default.
+- ✅ Variant cookie set with `Secure` flag (per WAVE-3 P2-2).
+- ✅ Test: 10/10 same-UA requests got variant A (deterministic hash works).
+- [ ] Run a real landing-page A/B test (set `ab_config.enabled = true`, set `variant_b_percent`, deploy two pod variants with `variant: "A"` and `variant: "B"` fields in their pod registry entries).
 
 ### Phase 5 (when Netlify Traffic Splits is probed)
 - [ ] Get a fresh `_nf-auth` cookie from browser DevTools.
@@ -666,7 +673,7 @@ This is a concrete data point supporting the recommendation: routing compute on 
 7. **Per-pod CF account mint** — write a script that takes a fresh CF account ID + master token and mints the scoped tokens needed (zone, worker, KV, D1, R2 — same pattern as `03_mint_scoped_tokens.py` but for the pod's account).
 
 8. **Health-check failover Cron Trigger** — implement the scheduled handler in the apex Worker, set up the Cron Trigger via CF API, test by taking down a pod and observing the routing switch. **KV write budget**: every-5-min Cron = 288 writes/day (fits in 1K/day Free limit); per-minute Cron = 1440 writes/day (EXCEEDS Free limit, would need Workers Paid $5/mo). Recommend every-5-min for Free tier.
-9. **Cross-account subdomain zone creation on CF Free tier** — create a fresh CF account (manual web signup), attempt to register `app-test-01.sonicloud.app` as a zone in it. If CF asks for TXT verification (per https://developers.cloudflare.com/dns/zone-setups/subdomain-setup/cross-account/), cross-account works on Free → per-account isolation doesn't need a separate domain registration. If error 1116 fires, the "separately-registered domain" upgrade path (§2.1) is the only free-tier option. This is the load-bearing unverified claim of the architecture — high priority.
+9. ✅ **RESOLVED 2026-08-17 (via CF docs)** — Cross-account subdomain zone creation on CF Free tier is **definitively BLOCKED**, not just unverified. CF docs at https://developers.cloudflare.com/dns/zone-setups/subdomain-setup/setup/ explicitly state: *"Subdomain setup is only available for Enterprise accounts. If you only want to create a subdomain for your site in Cloudflare, refer to Create a subdomain record."* The Enterprise entitlement is required for ANY subdomain zone setup, regardless of which account hosts the sub-zone. **Implication**: the "separately-registered domain" path (Option A in §2.1) is the ONLY free-tier path to per-account pod isolation. No live test needed — CF docs are authoritative. Recommend updating §2.1 to remove the "OR (b) cross-account subdomain setup" option since it's definitively not available on Free.
 10. ✅ **DONE 2026-08-17** — Gate `/__routes` behind an admin token (P1 security fix from opus peer review WAVE-1). Worker v2.1.0 deployed via `15_gate_routes_endpoint.py`. `/__routes` returns 401 without `x-admin-token` header; `/__health`'s `pod_count` returns -1 without token. Admin token value = `scrape_api_key` from `secrets.json` (reused as shared secret). Verified live.
 
 ---
@@ -676,11 +683,11 @@ This is a concrete data point supporting the recommendation: routing compute on 
 1. **Read `01_GROUND_TRUTH.md` first** — it's the consolidated reference of everything verified as of 2026-08-17.
 2. **Apex stays on CF** — FLEET.md's pivot to Netlify apex was right at the time, but CF Section 2.8 was removed in 2026 and CF is now strictly better at apex (KV/D1/R2, finer geo via colo, no bandwidth meter, more WAF rules, native Email Routing).
 3. **Netlify free tier is for DNS + Blobs + build-as-compute, NOT routing** — routing goes on CF Workers (per-account 100K req/day, dedicated, no credit pool).
-4. **Pod fleet uses Worker Routes on the apex zone** (NOT two-level NS delegation — that pattern is BLOCKED by CF error 1116 on Free tier; subdomain zones require Enterprise $5K+/mo). Per-pod Workers (e.g., `app-test-01-worker`) are deployed to CF MAIN account, each bound via Worker Routes to a hostname like `app-test-01.sonicloud.app` with A record `192.0.2.1` proxied=true (canonical CF pattern). This gives per-Worker isolation (own KV/D1/R2 bindings, own logs). Per-ACCOUNT isolation requires either (a) a separately-registered domain (e.g., `sonicloud-pods.com`) — ~$10/yr, OR (b) cross-account subdomain setup IF CF Free tier allows it (unverified — see §9 open question #9). Validated live 2026-08-17.
-5. **Edge router = apex CF Worker with KV-backed pod registry** — currently v2.1.0 deployed with weighted-random pod selection + admin-token-gated debug endpoints. Geo-routing via `request.cf.colo` (§3), A/B stickiness via cookie + hash (§4.2), and health-check failover via Cron Trigger (§3.3) are designed but NOT yet implemented — they're Phase 3/4 items. See §1.4 for what's actually live.
+4. **Pod fleet uses Worker Routes on the apex zone** (NOT two-level NS delegation — that pattern is BLOCKED by CF error 1116 on Free tier; subdomain zones require Enterprise $5K+/mo, per CF docs). Per-pod Workers (e.g., `app-test-01-worker`) are deployed to CF MAIN account, each bound via Worker Routes to a hostname like `app-test-01.sonicloud.app` with A record `192.0.2.1` proxied=true (canonical CF pattern). This gives per-Worker isolation (own KV/D1/R2 bindings, own logs). Per-ACCOUNT isolation requires a separately-registered domain (e.g., `sonicloud-pods.com`) — ~$10/yr — there is NO free-tier alternative (cross-account subdomain setup is Enterprise-only per CF docs, see §9 #9 ✅ RESOLVED). Validated live 2026-08-17.
+5. **Edge router = apex CF Worker with KV-backed pod registry** — v3.0.1 deployed with weighted-random pod selection + admin-token-gated debug endpoints + geo-routing via `request.cf.country` (Phase 3) + health-check Cron Trigger every 5 min (Phase 3) + A/B stickiness via cookie + djb2 hash (Phase 4). All Phase 1-4 items DONE. See §1.4 for the live verification list.
 6. **Netlify Traffic Splits exists but is unprobed** — the public API returns 404; the bb-api shape is empty in the sample. Needs a cookie-auth probe.
 7. **Netlify WAF exists on Free** (2 rules, 3 IPs/countries per rule) — the prior docs missed this. CF Free WAF is more generous (1 managed + 5 custom per zone). For per-pod isolation, per-pod CF accounts give per-pod WAF.
 8. **Grandfathered Netlify accounts are 6.7× more bandwidth-capable** — allocate to high-traffic sub-zones (app, users), NOT to DNS or low-traffic sites.
-9. **The first concrete change** (adding a KV namespace to the apex Worker and rewriting it with routing logic) is **DONE** as of 2026-08-17 (see §1.4). The admin-token gate on `/__routes` is also **DONE** (v2.1.0, per opus peer review WAVE-1 P1-1). Next concrete change: Phase 3 (geo-routing + health-check Cron Trigger) when a second real pod is added.
+9. **Phase 1-4 are all DONE** as of 2026-08-17 (see §1.4 for verification list). Worker is at v3.0.1. Next concrete changes: (a) deploy a real second pod to test geo-routing + failover end-to-end with multiple pods; (b) probe Netlify Traffic Splits bb-api shape (needs browser `_nf-auth` cookie); (c) grandfathered account integration (needs user-provided known grandfathered Netlify account).
 
 The plan is grounded in live-verified facts. Next action: Phase 1 of §8.

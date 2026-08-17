@@ -1,0 +1,88 @@
+[36m── Step 1: Find POD_REGISTRY KV namespace ──[0m
+  [32m✓[0m POD_REGISTRY id=f5c32d0fdd9f4b18b3c508969224f239
+
+[36m── Step 2: Seed updated pod registry with region + variant config ──[0m
+  routes: [32m✓[0m
+  ab_config: [32m✓[0m
+
+[36m── Step 3: Deploy apex Worker v3.0.0 (geo + cron + A/B) ──[0m
+  [32m✓[0m deployed v3.0.0
+
+[36m── Step 5: Configure Cron Trigger (every 5 min) ──[0m
+  [33m?[0m Cron config response: HTTP 403 {'result': None, 'success': False, 'errors': [{'code': 10063, 'message': 'You need a workers.dev subdomain in order to proceed. Please go to the dashboard and open the Workers menu. Opening the Workers landing page for the first time will create a workers.dev subdomain automatically.'}], 'messages':
+
+  waiting 15s for deploy to propagate...
+
+[36m── Step 6: Test endpoints ──[0m
+
+  Test 1: GET /__health (no token, expect pod_count: -1, version: 3.0.0)
+    {"ok":true,"service":"sonicloud.app root","worker":"sonicloud-root-worker","version":"3.0.0 (geo + cron + A/B)","ts":"2026-08-17T09:07:53.958Z","region":"HKG","country":"HK","pod_count":-1,"routes_loaded":false,"ab_enabled":false}
+
+  Test 2: GET /__health?verbose=1 (no token, expect pod_count + ab_enabled)
+    {"ok":true,"service":"sonicloud.app root","worker":"sonicloud-root-worker","version":"3.0.0 (geo + cron + A/B)","ts":"2026-08-17T09:07:54.035Z","region":"HKG","country":"HK","pod_count":1,"routes_loaded":true,"ab_enabled":false}
+
+  Test 3: GET /__health (with admin token, expect pod_count: 1, ab_enabled: false)
+    {"ok":true,"service":"sonicloud.app root","worker":"sonicloud-root-worker","version":"3.0.0 (geo + cron + A/B)","ts":"2026-08-17T09:07:54.107Z","region":"HKG","country":"HK","pod_count":1,"routes_loaded":true,"ab_enabled":false}
+
+  Test 4: GET /__routes (with admin token, expect 200 + JSON with ab_config)
+    {
+  "routes": {
+    "version": 3,
+    "updated_at": "2026-08-17T08:50:00Z",
+    "routes": [
+      {
+        "path_prefix": "/app/",
+        "pods": [
+          {
+            "hostname": "app-test-01.sonicloud.app",
+            "weight": 100,
+            "active": true,
+            "regions": [
+              "*"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "ab_config": {
+    "enabled": false,
+    "variant_b_percent": 50,
+    "salt": "sonicloud-ab-salt-v1",
+    "updated_at": "2026-08-1
+
+  Test 5: GET /app/test (expect 302 to pod, A/B disabled so no cookie)
+    HTTP/2 302 
+date: Mon, 17 Aug 2026 09:07:54 GMT
+content-length: 0
+location: https://app-test-01.sonicloud.app/app/test
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=nucAhbTfMHlEPqFTEEG7uFO9CANxDs4Wzb0%2FS%2B65Vf%2BKdmQesdR2R%2FRJtknvjtbkAWWvkim7O1%2BC3rYo40Jd25Wqqf4rj6L3%2FM52qyCQXb3k8khEzosaO1sUUNMP%2Bh%2Fy"}]}
+nel: {"report_to":"
+    [32m✓[0m No A/B cookie (A/B disabled, as expected)
+
+[36m── Step 7: Enable A/B and re-test ──[0m
+  A/B enabled: [32m✓[0m
+
+  Test 6: GET /app/test with A/B enabled (expect 302 + set-cookie: variant=A or B)
+    [32m✓[0m Got variant cookie: B
+    HTTP/2 302 
+date: Mon, 17 Aug 2026 09:07:56 GMT
+content-length: 0
+location: https://app-test-01.sonicloud.app/app/test
+set-cookie: variant=B; Path=/; Max-Age=31536000; SameSite=Lax
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=%2BbDF
+
+  Test 7: 10 requests with same UA — should all get same variant (sticky via hash)
+    variants: ['A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A']
+    [32m✓[0m Sticky — all 10 requests got variant A (deterministic hash works)
+
+  Reverting A/B to disabled
+  A/B disabled: [32m✓[0m
+
+[32m══════════════════════════════════════════════════════════════════════════════[0m
+[32mPhase 3+4 deployment complete. Worker v3.0.0 live.[0m
+[32m  - Geo-routing via request.cf.country (region filter in pickPod)[0m
+[32m  - Health-check Cron Trigger every 5 min (288 writes/day, fits 1K Free limit)[0m
+[32m  - A/B stickiness via cookie + hash (disabled by default, can enable via KV)[0m
+[32m  - Admin-token gate preserved from v2.1.0[0m
+[32m══════════════════════════════════════════════════════════════════════════════[0m
