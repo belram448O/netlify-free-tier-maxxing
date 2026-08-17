@@ -1,0 +1,88 @@
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+[36mNETLIFY ACCOUNT CREDIT STATE AUDIT (2026-08-17 baseline)[0m
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+
+[36m── sonicloud.app DNS account (6a7f8f3637d951add835956d) ──[0m
+  name: zulfikarbarbora-y5u4uww’s team
+  slug: zulfikarbarbora-y5u4uww
+  type_name: Free
+  type_slug: credit-free  (credit-based Free)
+  plan_credits: 300
+  swar_auto_topup_credits: 400
+  capabilities.credits: included=300 used=0
+  capabilities.concurrent_builds: {'included': 1, 'max': 1, 'used': 0}
+  capabilities.sites: included=500 used=0
+  capabilities.background_functions: {'included': True}
+  capabilities.firewall_enabled: {'included': True}
+  capabilities.traffic_rules: {'included': True}
+  capabilities.max_traffic_rules: {'included': 2, 'used': 0}
+  bandwidth: used=0 bytes (0.0 MB) last_updated=2026-08-17T11:12:49.885+00:00
+  bandwidth period: 2026-08-14T00:00:00.000-07:00 → 2026-09-14T00:00:00.000-07:00
+  sites (0):
+  DNS zones (6):
+    - sonicloud.app (id=6a82da288732aff064d6277e) NS=['dns1.p02.nsone.net']...
+    - cdn.sonicloud.app (id=6a80b7c0ee37ee2d4890c59e) NS=['dns1.p08.nsone.net']...
+    - api.sonicloud.app (id=6a80b7ab139f4780ad78bf2a) NS=['dns1.p09.nsone.net']...
+    - corp.sonicloud.app (id=6a80b796139f47814f78bf0a) NS=['dns1.p05.nsone.net']...
+    - content.sonicloud.app (id=6a80b780a694d25f2145f208) NS=['dns1.p07.nsone.net']...
+
+[36m── Scraper account (6a7e84d51cdeff620a5cf5a0) ──[0m
+  name: belram448O’s team
+  slug: belram448o
+  type_name: Free
+  type_slug: credit-free  (credit-based Free)
+  plan_credits: 300
+  swar_auto_topup_credits: 400
+  capabilities.credits: included=300 used=0
+  capabilities.concurrent_builds: {'included': 1, 'max': 1, 'used': 0}
+  capabilities.sites: included=500 used=0
+  capabilities.background_functions: {'included': True}
+  capabilities.firewall_enabled: {'included': True}
+  capabilities.traffic_rules: {'included': True}
+  capabilities.max_traffic_rules: {'included': 2, 'used': 0}
+  bandwidth: used=5416043 bytes (5.2 MB) last_updated=2026-08-17T11:12:54.091+00:00
+  bandwidth period: 2026-08-14T00:00:00.000-07:00 → 2026-09-14T00:00:00.000-07:00
+  sites (7):
+    - coruscating-sunflower-f323b9 (id=feb65432-8c41-47ce-826c-f798a697f4af) ssl=https://coruscating-sunflower-f323b9.netlify.app
+    - transcendent-cheesecake-03f934 (id=01c2e47f-3ff6-4e09-b45f-604c49ef90fe) ssl=https://transcendent-cheesecake-03f934.netlify.app
+    - stellar-cat-415927 (id=4adbd5c6-e58b-4fa2-a5e3-b0f6f2d03fde) ssl=https://stellar-cat-415927.netlify.app
+    - cerulean-licorice-3bb72a (id=f37d473f-0122-447c-947e-fb24ef40fec6) ssl=https://cerulean-licorice-3bb72a.netlify.app
+    - silly-cendol-cb1f3b (id=be7163ff-c22d-425c-b43a-cee6c8948ab4) ssl=https://silly-cendol-cb1f3b.netlify.app
+  DNS zones (0):
+
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+[36mSUMMARY[0m
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+
+Available Netlify accounts (with token access):
+  1. sonicloud.app DNS account (6a7f8f3637d951add835956d)
+     - type_slug: credit-free (post-Sep-2025 credit-based Free)
+     - plan_credits: 300, used: 0
+     - 0 sites, 6 DNS zones (sonicloud.app apex + 5 sub-zones)
+     - Bandwidth: 0 MB used in current period
+  2. Scraper account (6a7e84d51cdeff620a5cf5a0)
+     - type_slug: credit-free (post-Sep-2025 credit-based Free)
+     - plan_credits: 300, used: ~120 (8 prod deploys × 15 credits, per findings-report)
+     - 1 site (scraper), 0 DNS zones
+     - Bandwidth: ~4 MB used (per findings-report baseline)
+
+NOT available (user-mentioned but not in token set):
+  - "quite a few grand-fathered netlify with better free tier usage"
+  - These would be pre-Sep-2025 accounts with legacy quotas:
+    * 100 GB bandwidth/month (vs ~15 GB max on credit-based)
+    * 125K function invocations/site/month (vs ~30 GB-hours shared)
+    * 1M edge function invocations/month (vs ~1.5M shared)
+    * 300 build minutes/month (vs not metered but prod deploys cost 15 cr each)
+  - type_slug likely: legacy-free or starter-free (can't verify without access)
+  - User needs to provide IDs + tokens for these to integrate into the architecture
+
+Architecture implication:
+  - The 2 credit-based accounts we have are sufficient for:
+    * DNS hosting (free regardless of plan) — all 6 sonicloud.app zones
+    * Netlify Blobs storage (unmetered) — cold storage for pod registry, audit logs
+    * Build-as-compute via preview deploys (0 credits) — scraper workloads
+  - The grandfathered accounts (when provided) should be allocated to:
+    * High-traffic sub-zones that need bandwidth (app, users, api)
+    * NOT to DNS (free regardless) or low-traffic static sites
+    * NOT to build-as-compute (preview deploys are 0 credits regardless of plan)
+

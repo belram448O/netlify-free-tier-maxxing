@@ -1,0 +1,12 @@
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+[36mPER-ACCOUNT POD ISOLATION — Cross-account pod Worker via CNAME → workers.dev[0m
+[36m══════════════════════════════════════════════════════════════════════════════[0m
+
+[36m── Step 1: Check cf_sub_token Worker permissions on CF SUB account ──[0m
+  [31m✗[0m cf_sub_token cannot list Workers: HTTP 403 {'success': False, 'errors': [{'code': 10000, 'message': 'Authentication error'}], 'messages': [], 'result': None}
+  [33m→ Will try cf_main_token (user-scoped, might work cross-account)[0m
+
+[36m── Step 2: Get/register workers.dev subdomain on CF SUB account ──[0m
+  [31m✗[0m GET subdomain failed: HTTP 403 {'success': False, 'errors': [{'code': 10000, 'message': 'Authentication error'}], 'messages': [], 'result': None}
+
+[31mCannot proceed without workers.dev subdomain on CF SUB. Exiting.[0m
