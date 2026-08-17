@@ -64,8 +64,8 @@ netlify-free-tier-maxxing/
 │   ├── netlify-free-tier-agent-kit.zip (snapshot of the clean agent-kit)
 │   └── netlify-free-tier/             (doc copies — agent-skill.md, findings-report.md)
 │
-└── cross-project-handoffs/            ← NOT netlify-related; preserved here for handoff
-    └── sonicloud-ns-architecture.md   (belongs in sonicloud-infra repo, not here)
+└── docs/
+    └── netlify-ns-handoff.md          ← carry-over note for next session (Netlify DNS / NS only)
 ```
 
 ## Relationship to other repos
@@ -74,8 +74,7 @@ netlify-free-tier-maxxing/
 |---|---|---|
 | `github.com/belram448O/netlify-free-tier-agent-kit` | Lean, reusable agent kit (docs + skill only) | Pushed, public |
 | `github.com/belram448O/netlify-free-scraper` | Production scraper code (own life, own commits) | Pushed, public, also pulled in as submodule here |
-| **`github.com/belram448O/netlify-free-tier-maxxing`** | **THIS repo — raw research artifacts + superset** | **TODO: push (see PUSH_INSTRUCTIONS.md)** |
-| `github.com/zulfikarbarbora-outl/sonicloud-infra` | Unrelated sonicloud.app infra (private, separate) | Separate — `cross-project-handoffs/` here contains one doc destined for that repo |
+| **`github.com/belram448O/netlify-free-tier-maxxing`** | **THIS repo — raw research artifacts + superset** | Pushed, public |
 
 ## Investigation summary
 
@@ -99,6 +98,7 @@ This repo preserves the full audit trail of the Netlify free-tier investigation 
 - **To automate Netlify operations the PAT can't do:** use `agent-kit/netlify-project/scraper/tools/netlify-dashboard-api.mjs` (the bb-api CLI)
 - **To see the raw evidence:** browse `upload/*.har` (HAR captures) and `tool-results/*.txt` (saved grep/read outputs)
 - **To see the probe code that produced the findings:** look at `netlify-probe/` (build-env probe) and `netlify-log-probe/` (log-egress probe)
+- **To continue work on the Netlify DNS / NS subdomain delegation pattern:** read `docs/netlify-ns-handoff.md` — focused carry-over note covering the DNS zone API, per-zone record template, parent-zone delegation, and the edge-routing-vs-isolation tradeoff
 
 ## License
 

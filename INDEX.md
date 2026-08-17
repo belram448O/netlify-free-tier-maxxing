@@ -212,10 +212,10 @@ Outputs from search and read operations during the investigation. Preserved for 
 
 ---
 
-## `cross-project-handoffs/` — NOT netlify-related
+## `docs/` — carry-over handoff note
 
-Files that were produced during sessions that touched multiple projects. Preserved here so the next session can move them to their proper home.
+Focused note for the next session covering only the Netlify DNS / NS subdomain delegation pattern (zone creation API, per-zone record template, parent-zone NS delegation, edge-routing-vs-isolation tradeoff, known gotchas). The broader architecture context is supplied separately by the user; this doc is strictly the Netlify-DNS-specific bits verified during the investigation.
 
-| Path | Purpose | Proper home |
-|---|---|---|
-| `cross-project-handoffs/sonicloud-ns-architecture.md` | The sonicloud.app NS/DNS architecture + the design discussion about evolving it to a CF Worker edge router + pod fleet | Should be moved to `github.com/zulfikarbarbora-outl/sonicloud-infra` (private, separate repo) |
+| Path | Purpose |
+|---|---|
+| `docs/netlify-ns-handoff.md` | Carry-over note for next session — Netlify DNS zones, NS1 delegation, the per-subdomain isolation pattern, API surface, gotchas. Supersedes the now-removed `cross-project-handoffs/sonicloud-ns-architecture.md` (which mixed Netlify DNS findings with sonicloud.app architecture — the Netlify bits are preserved here; the sonicloud bits are no longer in this repo). |
