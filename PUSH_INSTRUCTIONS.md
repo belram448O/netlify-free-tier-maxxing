@@ -1,8 +1,15 @@
 # Push Instructions — netlify-free-tier-maxxing
 
-> The current environment has **no GitHub credentials**. This file tells the next session / user how to push this repo to `github.com/belram448O/netlify-free-tier-maxxing` (which needs to be created).
+> **STATUS: ✅ PUSHED TO BOTH REMOTES (2026-08-17)**
 >
-> An **offline archive** of the entire repo (after the final commit) is also produced at `/home/z/my-project/download/netlify-free-tier-maxxing-final.tar.gz` so the contents survive the sandbox wipe even if the push itself fails or has to happen from a different machine.
+> - **GitHub:** https://github.com/belram448O/netlify-free-tier-maxxing (HEAD: `508666af`)
+> - **GitLab:** https://gitlab.com/ansgareutychisO/netlify-free-tier-maxxing (HEAD: `508666af`)
+>
+> Recursive clone verified working: `git clone --recursive https://github.com/belram448O/netlify-free-tier-maxxing.git`
+>
+> Both the scraper submodule repo (`netlify-free-scraper`) and the clean agent-kit repo (`netlify-free-tier-agent-kit`) were also made public on GitHub to ensure recursive clone works for anonymous users.
+>
+> The remainder of this file is preserved for historical reference.
 
 ---
 

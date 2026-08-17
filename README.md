@@ -4,6 +4,19 @@
 >
 > **For the lean, reusable version, see:** [github.com/belram448O/netlify-free-tier-agent-kit](https://github.com/belram448O/netlify-free-tier-agent-kit) — that repo contains only the polished skill/docs without the raw research material.
 
+## Live remotes
+
+| Remote | URL |
+|---|---|
+| **GitHub (primary)** | https://github.com/belram448O/netlify-free-tier-maxxing |
+| **GitLab (mirror)** | https://gitlab.com/ansgareutychisO/netlify-free-tier-maxxing |
+
+Both are public and kept in sync. Clone recursively to get the scraper submodule too:
+
+```bash
+git clone --recursive https://github.com/belram448O/netlify-free-tier-maxxing.git
+```
+
 ## What's in here
 
 ```
